@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the app's Info.plist by Tauri. These strings appear in the
+     macOS prompts the first time Patina opens a protected folder. -->
+<plist version="1.0">
+<dict>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Patina needs access to your Desktop to show and manage its files.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Patina needs access to your Documents folder to show and manage its files.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Patina needs access to your Downloads folder to show and manage its files.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>Patina needs access to external drives to show and manage their files.</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>Patina needs access to network drives to show and manage their files.</string>
+</dict>
+</plist>
