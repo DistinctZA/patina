@@ -2514,7 +2514,7 @@ dependencies = [
 
 [[package]]
 name = "patina"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "block2",
  "libc",
