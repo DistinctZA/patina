@@ -39,9 +39,9 @@ npm install && npm run tauri dev
 
 <br /><br />
 
-<img src="docs/screenshot-columns.png" width="900" alt="Patina with source code in Columns view and wallpapers in Gallery view, previewing code" />
+<img src="docs/screenshot-panes.png" width="900" alt="Patina with two panes in List view showing the home folder, with the preview panel on the right" />
 
-<sub><b>Columns + Gallery</b>: browsing source code with a live code preview, next to the built-in wallpapers.</sub>
+<sub><b>Two panes</b>: your folders side by side in List view, each with its own icon, and the preview panel.</sub>
 
 </div>
 
