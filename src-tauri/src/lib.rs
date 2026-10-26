@@ -1,6 +1,7 @@
 mod fs_ops;
+mod thumbs;
 
-use fs_ops::{Listing, SortBy};
+use fs_ops::{Details, Listing, Sidebar, SortBy, TextPreview};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -8,10 +9,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
+use tokio::sync::Semaphore;
 
 /// One folder watcher per pane; replacing an entry drops (stops) the old one.
 #[derive(Default)]
 struct Watchers(Mutex<HashMap<String, RecommendedWatcher>>);
+
+/// Caps how many Quick Look processes run at once while a grid scrolls.
+struct ThumbSlots(Semaphore);
 
 #[derive(Serialize, Clone)]
 struct DirChanged {
@@ -47,6 +52,47 @@ fn home_dir(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 async fn list_dir(path: String, show_hidden: bool, sort_by: String, desc: bool) -> Result<Listing, String> {
     blocking(move || fs_ops::list_dir(Path::new(&path), show_hidden, SortBy::parse(&sort_by), desc)).await
+}
+
+#[tauri::command]
+async fn find_tagged(tag: String, show_hidden: bool, sort_by: String, desc: bool) -> Result<Listing, String> {
+    blocking(move || fs_ops::find_tagged(&tag, show_hidden, SortBy::parse(&sort_by), desc)).await
+}
+
+#[tauri::command]
+async fn sidebar(app: AppHandle) -> Result<Sidebar, String> {
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    blocking(move || Ok(fs_ops::sidebar(&home))).await
+}
+
+#[tauri::command]
+async fn details(path: String) -> Result<Details, String> {
+    blocking(move || fs_ops::details(Path::new(&path))).await
+}
+
+#[tauri::command]
+async fn set_mode(path: String, mode: u32) -> Result<(), String> {
+    blocking(move || fs_ops::set_mode(Path::new(&path), mode)).await
+}
+
+#[tauri::command]
+async fn read_text(path: String) -> Result<Option<TextPreview>, String> {
+    blocking(move || fs_ops::read_text(Path::new(&path), 64 * 1024)).await
+}
+
+/// Path to a cached PNG thumbnail, or `None` when Quick Look has no preview.
+#[tauri::command]
+async fn thumbnail(
+    app: AppHandle,
+    slots: State<'_, ThumbSlots>,
+    path: String,
+    size: u32,
+) -> Result<Option<String>, String> {
+    let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("thumbs");
+    let _slot = slots.0.acquire().await.map_err(|e| e.to_string())?;
+    blocking(move || thumbs::thumbnail(&cache, Path::new(&path), size))
+        .await
+        .map(|p| p.map(|p| p.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
@@ -115,9 +161,28 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(Watchers::default())
+        .manage(ThumbSlots(Semaphore::new(4)))
+        .setup(|app| {
+            // Tell the sidebar when a drive is plugged in or ejected.
+            let handle = app.handle().clone();
+            let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                if res.is_ok() {
+                    let _ = handle.emit("volumes-changed", ());
+                }
+            })?;
+            watcher.watch(Path::new("/Volumes"), RecursiveMode::NonRecursive)?;
+            app.state::<Watchers>().0.lock().unwrap().insert("volumes".into(), watcher);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             home_dir,
             list_dir,
+            find_tagged,
+            sidebar,
+            details,
+            set_mode,
+            read_text,
+            thumbnail,
             copy_into,
             move_into,
             rename,

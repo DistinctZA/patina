@@ -1,5 +1,8 @@
-// Typed wrappers around the Rust commands in src-tauri/src/lib.rs.
-import { invoke } from "@tauri-apps/api/core";
+// Typed wrappers around the Rust commands in src-tauri/src/lib.rs. Nothing
+// here touches the network: `invoke` calls Rust code inside the app.
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+
+export type Tag = { name: string; color: number };
 
 export type Entry = {
   name: string;
@@ -9,20 +12,53 @@ export type Entry = {
   isHidden: boolean;
   size: number;
   modified: number | null;
+  tags: Tag[];
 };
 
 export type Listing = {
   path: string;
   parent: string | null;
   entries: Entry[];
+  available: number | null;
 };
 
 export type SortBy = "name" | "size" | "modified" | "kind";
+
+export type Place = { name: string; path: string; icon: string };
+export type Volume = {
+  name: string;
+  path: string;
+  available: number | null;
+  total: number | null;
+  isRoot: boolean;
+};
+export type SidebarData = { favorites: Place[]; volumes: Volume[] };
+
+export type Details = {
+  size: number;
+  created: number | null;
+  modified: number | null;
+  accessed: number | null;
+  mode: number;
+  owner: string;
+  group: string;
+  items: number | null;
+  linkTarget: string | null;
+};
+
+export type TextPreview = { text: string; truncated: boolean };
 
 export const api = {
   homeDir: () => invoke<string>("home_dir"),
   listDir: (path: string, showHidden: boolean, sortBy: SortBy, desc: boolean) =>
     invoke<Listing>("list_dir", { path, showHidden, sortBy, desc }),
+  findTagged: (tag: string, showHidden: boolean, sortBy: SortBy, desc: boolean) =>
+    invoke<Listing>("find_tagged", { tag, showHidden, sortBy, desc }),
+  sidebar: () => invoke<SidebarData>("sidebar"),
+  details: (path: string) => invoke<Details>("details", { path }),
+  setMode: (path: string, mode: number) => invoke<void>("set_mode", { path, mode }),
+  readText: (path: string) => invoke<TextPreview | null>("read_text", { path }),
+  thumbnail: (path: string, size: number) => invoke<string | null>("thumbnail", { path, size }),
   copyInto: (sources: string[], dest: string) => invoke<void>("copy_into", { sources, dest }),
   moveInto: (sources: string[], dest: string) => invoke<void>("move_into", { sources, dest }),
   rename: (path: string, newName: string) => invoke<string>("rename", { path, newName }),
@@ -33,8 +69,108 @@ export const api = {
   watchDir: (pane: string, path: string) => invoke<void>("watch_dir", { pane, path }),
 };
 
+/** A URL the webview can load a local file from. */
+export const fileUrl = (path: string) => convertFileSrc(path);
+
+// Quick Look thumbnails, shared by the grid and the preview panel. Keyed by
+// mtime and size too, so an edited file gets a fresh thumbnail.
+const thumbCache = new Map<string, Promise<string | null>>();
+
+export function thumbnailUrl(entry: Entry, size: number): Promise<string | null> {
+  const key = `${entry.path}|${entry.modified}|${entry.size}|${size}`;
+  let url = thumbCache.get(key);
+  if (!url) {
+    if (thumbCache.size > 4000) thumbCache.clear();
+    url = api
+      .thumbnail(entry.path, size)
+      .then((p) => (p ? fileUrl(p) : null))
+      .catch(() => null);
+    thumbCache.set(key, url);
+  }
+  return url;
+}
+
+/** Finder's tag colours, by Finder's colour number. */
+export const TAG_COLORS: Record<number, string> = {
+  1: "#8e8e93",
+  2: "#34c759",
+  3: "#af52de",
+  4: "#0a84ff",
+  5: "#ffcc00",
+  6: "#ff3b30",
+  7: "#ff9500",
+};
+
+export const FINDER_TAGS: Tag[] = [
+  { name: "Red", color: 6 },
+  { name: "Orange", color: 7 },
+  { name: "Yellow", color: 5 },
+  { name: "Green", color: 2 },
+  { name: "Blue", color: 4 },
+  { name: "Purple", color: 3 },
+  { name: "Grey", color: 1 },
+];
+
 export function basename(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? "/";
+}
+
+export function extension(name: string): string {
+  const i = name.lastIndexOf(".");
+  return i > 0 ? name.slice(i + 1).toLowerCase() : "";
+}
+
+const IMAGE = new Set(["jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "tif", "tiff", "svg", "avif", "ico"]);
+const VIDEO = new Set(["mp4", "mov", "m4v", "webm"]);
+const AUDIO = new Set(["mp3", "m4a", "aac", "wav", "aiff", "aif", "flac", "ogg"]);
+const ARCHIVE = new Set(["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "dmg"]);
+const CODE = new Set([
+  "js", "ts", "jsx", "tsx", "svelte", "vue", "rs", "py", "rb", "go", "swift", "kt", "java", "c", "h",
+  "cpp", "hpp", "cs", "php", "html", "css", "scss", "json", "yaml", "yml", "toml", "xml", "sh", "zsh",
+  "lua", "sql",
+]);
+
+export type Media = "image" | "video" | "audio" | "archive" | "code" | null;
+
+export function mediaOf(entry: Entry): Media {
+  if (entry.isDir) return null;
+  const ext = extension(entry.name);
+  if (IMAGE.has(ext)) return "image";
+  if (VIDEO.has(ext)) return "video";
+  if (AUDIO.has(ext)) return "audio";
+  if (ARCHIVE.has(ext)) return "archive";
+  if (CODE.has(ext)) return "code";
+  return null;
+}
+
+const KINDS: Record<string, string> = {
+  jpg: "JPEG image", jpeg: "JPEG image", png: "PNG image", gif: "GIF image", heic: "HEIC image",
+  webp: "WebP image", svg: "SVG image", pdf: "PDF document", txt: "Plain text", md: "Markdown",
+  html: "HTML document", json: "JSON", zip: "ZIP archive", dmg: "Disk image", mp4: "MPEG-4 movie",
+  mov: "QuickTime movie", mp3: "MP3 audio", m4a: "Apple audio", wav: "WAV audio", rs: "Rust source",
+  ts: "TypeScript", js: "JavaScript", py: "Python script", sh: "Shell script", docx: "Word document",
+  xlsx: "Excel workbook", pptx: "PowerPoint", pages: "Pages document", key: "Keynote", numbers: "Numbers",
+};
+
+/** App bundles are folders on disk, but behave like a single file. */
+export function isApp(entry: Entry): boolean {
+  return entry.isDir && entry.name.endsWith(".app");
+}
+
+export function kindOf(entry: Entry): string {
+  if (entry.isDir) return isApp(entry) ? "Application" : "Folder";
+  const ext = extension(entry.name);
+  return KINDS[ext] ?? (ext ? `${ext.toUpperCase()} file` : "Document");
+}
+
+/** Whether to ask Rust for a thumbnail (apps show their own icon). */
+export function wantsThumbnail(entry: Entry): boolean {
+  return !entry.isDir || isApp(entry);
+}
+
+/** Changes when the file itself changes, not when its folder is re-listed. */
+export function entryKey(entry: Entry): string {
+  return `${entry.path}|${entry.modified}|${entry.size}`;
 }
 
 /** Sizes in decimal units, like Finder. */

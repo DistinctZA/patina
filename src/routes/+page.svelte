@@ -1,9 +1,29 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { api, basename } from "$lib/api";
+  import {
+    ChevronLeft,
+    ChevronRight,
+    Copy,
+    Eye,
+    EyeOff,
+    FolderInput,
+    FolderPlus,
+    LayoutGrid,
+    List,
+    PanelLeft,
+    PanelRight,
+    PencilLine,
+    RefreshCw,
+    Search,
+    Trash,
+    X,
+  } from "@lucide/svelte";
+  import { api, type SidebarData } from "$lib/api";
   import { PaneState } from "$lib/pane-state.svelte";
   import Pane from "$lib/Pane.svelte";
+  import Preview from "$lib/Preview.svelte";
+  import Sidebar from "$lib/Sidebar.svelte";
 
   const left = new PaneState("left");
   const right = new PaneState("right");
@@ -12,6 +32,12 @@
   let activeId = $state<"left" | "right">("left");
   const active = $derived(panes[activeId]);
   const other = $derived(activeId === "left" ? right : left);
+
+  let home = $state("");
+  let sidebarData = $state<SidebarData | null>(null);
+  let showSidebar = $state(true);
+  let showPreview = $state(true);
+  let searchInput = $state<HTMLInputElement>();
 
   type Prompt = { title: string; action: string; value: string; submit: (value: string) => Promise<void> };
   let prompt = $state<Prompt | null>(null);
@@ -42,14 +68,12 @@
 
   // ── Commands ───────────────────────────────────────────────────────────
 
-  function copyToOther() {
+  function transfer(kind: "copy" | "move") {
     const paths = active.targets().map((e) => e.path);
-    if (paths.length) run(() => api.copyInto(paths, other.path).then(refreshBoth));
-  }
-
-  function moveToOther() {
-    const paths = active.targets().map((e) => e.path);
-    if (paths.length) run(() => api.moveInto(paths, other.path).then(refreshBoth));
+    if (!paths.length) return;
+    if (!other.isFolder) return showError("Open a folder in the other pane first.");
+    const op = kind === "copy" ? api.copyInto : api.moveInto;
+    run(() => op(paths, other.path).then(refreshBoth));
   }
 
   function trash() {
@@ -59,6 +83,7 @@
 
   function newFolder() {
     const pane = active;
+    if (!pane.isFolder) return showError("Open a folder first.");
     prompt = {
       title: "New folder",
       action: "Create",
@@ -81,10 +106,14 @@
       value: entry.name,
       submit: async (name) => {
         const renamed = await api.rename(entry.path, name);
-        await pane.load(pane.path, { focus: renamed });
+        await pane.load(pane.path, { focus: renamed, keep: true });
         pane.moveCursor(pane.cursor);
       },
     };
+  }
+
+  function openLocation(location: string) {
+    run(() => active.load(location));
   }
 
   async function submitPrompt(e: SubmitEvent) {
@@ -108,6 +137,18 @@
     });
   }
 
+  function searchKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      active.setFilter("");
+      searchInput?.blur();
+    } else if (e.key === "Enter" || e.key === "ArrowDown") {
+      // Hand the keyboard back to the list, keeping the filter.
+      e.preventDefault();
+      searchInput?.blur();
+      active.moveCursor(0);
+    }
+  }
+
   // ── Keyboard ───────────────────────────────────────────────────────────
 
   let typed = "";
@@ -118,8 +159,14 @@
       if (e.key === "Escape") prompt = null;
       return;
     }
+    // Let text fields have their keys; checkboxes (permissions) shouldn't
+    // swallow the shortcuts after being clicked.
+    if (e.target instanceof HTMLInputElement && e.target.type !== "checkbox") return;
+
     const pane = active;
-    const page = Math.max(1, Math.floor((window.innerHeight - 160) / 24) - 1);
+    const grid = pane.view === "grid";
+    const step = grid ? pane.columns : 1;
+    const page = Math.max(1, Math.floor((window.innerHeight - 200) / (grid ? 132 : 26)) - 1) * step;
     const cmd = e.metaKey;
 
     const handled = (() => {
@@ -142,9 +189,15 @@
           run(async () => pane.goForward());
           return true;
         case e.key === "ArrowDown":
-          pane.moveCursor(pane.cursor + 1, e.shiftKey);
+          pane.moveCursor(pane.cursor + step, e.shiftKey);
           return true;
         case e.key === "ArrowUp":
+          pane.moveCursor(pane.cursor - step, e.shiftKey);
+          return true;
+        case e.key === "ArrowRight" && grid:
+          pane.moveCursor(pane.cursor + 1, e.shiftKey);
+          return true;
+        case e.key === "ArrowLeft" && grid:
           pane.moveCursor(pane.cursor - 1, e.shiftKey);
           return true;
         case e.key === "PageDown":
@@ -160,10 +213,10 @@
           pane.moveCursor(pane.entries.length - 1, e.shiftKey);
           return true;
         case e.key === "F5":
-          copyToOther();
+          transfer("copy");
           return true;
         case e.key === "F6":
-          moveToOther();
+          transfer("move");
           return true;
         case e.key === "F2":
           rename();
@@ -187,11 +240,27 @@
         case e.code === "KeyR" && cmd:
           run(refreshBoth);
           return true;
+        case e.code === "KeyP" && cmd && e.shiftKey:
+          showPreview = !showPreview;
+          return true;
+        case e.code === "KeyS" && cmd && e.ctrlKey:
+          showSidebar = !showSidebar;
+          return true;
+        case (e.code === "Digit1" || e.key === "1") && cmd:
+          pane.view = "list";
+          return true;
+        case (e.code === "Digit2" || e.key === "2") && cmd:
+          pane.view = "grid";
+          return true;
+        case e.key === "f" && cmd:
+          searchInput?.focus();
+          return true;
         case e.key === "a" && cmd:
           pane.selectAll();
           return true;
         case e.key === "Escape":
-          pane.clearSelection();
+          if (pane.filter) pane.setFilter("");
+          else pane.clearSelection();
           return true;
         case e.key.length === 1 && !cmd && !e.ctrlKey && !e.altKey:
           // Type the start of a name to jump to it.
@@ -210,54 +279,140 @@
 
   // ── Startup ────────────────────────────────────────────────────────────
 
+  const loadSidebar = () =>
+    api
+      .sidebar()
+      .then((d) => (sidebarData = d))
+      .catch(showError);
+
   onMount(() => {
     // Refresh a pane shortly after its folder changes on disk; bursts of
     // events (e.g. a big copy) collapse into one reload.
     const timers: Record<string, ReturnType<typeof setTimeout>> = {};
-    const unlisten = listen<{ pane: "left" | "right"; path: string }>("dir-changed", ({ payload }) => {
+    const unlistenDir = listen<{ pane: "left" | "right"; path: string }>("dir-changed", ({ payload }) => {
       const pane = panes[payload.pane];
       if (!pane || pane.path !== payload.path) return;
       clearTimeout(timers[payload.pane]);
-      timers[payload.pane] = setTimeout(() => pane.refresh().catch(showError), 150);
+      timers[payload.pane] = setTimeout(() => {
+        // Skip if the user has since moved on, so a refresh of the old folder
+        // can't override their navigation.
+        if (pane.loading || pane.path !== payload.path) return;
+        pane.refresh().catch(showError);
+      }, 150);
+    });
+    const unlistenVolumes = listen("volumes-changed", () => {
+      clearTimeout(timers.volumes);
+      timers.volumes = setTimeout(loadSidebar, 500);
     });
 
+    loadSidebar();
     api
       .homeDir()
-      .then((home) => Promise.all([left.load(home), right.load(home)]))
+      .then((h) => {
+        home = h;
+        return Promise.all([left.load(h), right.load(h)]);
+      })
       .catch(showError);
 
     return () => {
-      unlisten.then((fn) => fn());
+      unlistenDir.then((fn) => fn());
+      unlistenVolumes.then((fn) => fn());
     };
   });
 
-  const targetCount = $derived(active.selected.size || (active.current ? 1 : 0));
+  const hasTargets = $derived(active.selected.size > 0 || !!active.current);
 </script>
 
 <svelte:window onkeydown={onKey} />
 <svelte:head><title>Patina — {active.title}</title></svelte:head>
 
-<main>
-  <div class="panes">
-    <Pane pane={left} active={activeId === "left"} onactivate={() => (activeId = "left")} />
-    <Pane pane={right} active={activeId === "right"} onactivate={() => (activeId = "right")} />
-  </div>
+<!-- Clicking a button keeps keyboard focus on the panes (no focus ring, and
+     Return still opens the selected file). -->
+<div
+  class="app"
+  class:no-sidebar={!showSidebar}
+  role="presentation"
+  onmousedown={(e) => (e.target as Element).closest("button") && e.preventDefault()}
+>
+  {#if showSidebar}
+    <Sidebar data={sidebarData} current={active.path} onopen={openLocation} />
+  {/if}
 
-  <footer class="toolbar">
-    <button onclick={copyToOther} disabled={busy || !targetCount}>
-      Copy {activeId === "left" ? "→" : "←"} <kbd>F5</kbd>
-    </button>
-    <button onclick={moveToOther} disabled={busy || !targetCount}>
-      Move {activeId === "left" ? "→" : "←"} <kbd>F6</kbd>
-    </button>
-    <button onclick={rename} disabled={busy || !active.current}>Rename <kbd>F2</kbd></button>
-    <button onclick={newFolder} disabled={busy}>New Folder <kbd>F7</kbd></button>
-    <button onclick={trash} disabled={busy || !targetCount}>Move to Bin <kbd>⌘⌫</kbd></button>
-    <span class="spacer"></span>
-    <button onclick={() => run(() => active.toggleHidden())}>
-      {active.showHidden ? "Hide" : "Show"} hidden <kbd>⌘⇧.</kbd>
-    </button>
-  </footer>
+  <div class="main">
+    <header class="toolbar" data-tauri-drag-region>
+      <div class="group">
+        <button onclick={() => run(async () => active.goBack())} disabled={!active.canGoBack} title="Back (⌘[)">
+          <ChevronLeft size={17} />
+        </button>
+        <button onclick={() => run(async () => active.goForward())} disabled={!active.canGoForward} title="Forward (⌘])">
+          <ChevronRight size={17} />
+        </button>
+      </div>
+      <h1 data-tauri-drag-region>{active.title}</h1>
+
+      <span class="flex" data-tauri-drag-region></span>
+
+      <div class="group">
+        <button class:on={active.view === "grid"} onclick={() => (active.view = "grid")} title="Icons (⌘2)">
+          <LayoutGrid size={16} />
+        </button>
+        <button class:on={active.view === "list"} onclick={() => (active.view = "list")} title="List (⌘1)">
+          <List size={16} />
+        </button>
+      </div>
+
+      <div class="group">
+        <button class:on={showSidebar} onclick={() => (showSidebar = !showSidebar)} title="Sidebar (⌃⌘S)">
+          <PanelLeft size={16} />
+        </button>
+        <button class:on={showPreview} onclick={() => (showPreview = !showPreview)} title="Preview (⌘⇧P)">
+          <PanelRight size={16} />
+        </button>
+        <button class:on={active.showHidden} onclick={() => run(() => active.toggleHidden())} title="Hidden files (⌘⇧.)">
+          {#if active.showHidden}<Eye size={16} />{:else}<EyeOff size={16} />{/if}
+        </button>
+      </div>
+
+      <div class="group">
+        <button onclick={() => run(refreshBoth)} title="Refresh (⌘R)"><RefreshCw size={15} /></button>
+        <button onclick={() => transfer("copy")} disabled={busy || !hasTargets} title="Copy to other pane (F5)">
+          <Copy size={16} />
+        </button>
+        <button onclick={() => transfer("move")} disabled={busy || !hasTargets} title="Move to other pane (F6)">
+          <FolderInput size={16} />
+        </button>
+        <button onclick={newFolder} disabled={busy} title="New folder (F7)"><FolderPlus size={16} /></button>
+        <button onclick={rename} disabled={busy || !active.current} title="Rename (F2)"><PencilLine size={16} /></button>
+        <button onclick={trash} disabled={busy || !hasTargets} title="Move to Bin (⌘⌫)"><Trash size={16} /></button>
+      </div>
+
+      <label class="search">
+        <Search size={14} />
+        <input
+          bind:this={searchInput}
+          value={active.filter}
+          oninput={(e) => active.setFilter(e.currentTarget.value)}
+          onkeydown={searchKey}
+          placeholder="Search"
+          spellcheck="false"
+          autocomplete="off"
+        />
+        {#if active.filter}
+          <button class="clear" onclick={() => active.setFilter("")} title="Clear"><X size={12} /></button>
+        {/if}
+      </label>
+    </header>
+
+    <div class="body" class:with-preview={showPreview}>
+      <div class="panes">
+        <Pane pane={left} {home} active={activeId === "left"} onactivate={() => (activeId = "left")} />
+        <Pane pane={right} {home} active={activeId === "right"} onactivate={() => (activeId = "right")} />
+      </div>
+      {#if showPreview}
+        <Preview entry={active.current} onerror={showError} />
+      {/if}
+    </div>
+  </div>
 
   {#if toast}
     <div class="toast" role="alert">{toast}</div>
@@ -279,45 +434,37 @@
       </form>
     </div>
   {/if}
-</main>
+</div>
 
 <style>
+  /* Slate greys with a darker inset sidebar; blue folders, orange accents. */
   :global(:root) {
-    --bg: #ecebe8;
-    --pane: #ffffff;
-    --border: #d9d7d2;
-    --text: #1f2422;
-    --muted: #6b716e;
-    --faint: #a3a8a5;
-    --hover: rgba(0, 0, 0, 0.05);
-    --stripe: rgba(0, 0, 0, 0.025);
-    --accent: #2f8a7a;
-    --accent-soft: rgba(47, 138, 122, 0.45);
-    --selection: #2f8a7a;
-    --selection-text: #ffffff;
-    --selection-muted: rgba(47, 138, 122, 0.16);
-    --folder: #5fa89a;
-    --button: #ffffff;
-    color-scheme: light dark;
-  }
-  @media (prefers-color-scheme: dark) {
-    :global(:root) {
-      --bg: #161a19;
-      --pane: #1e2322;
-      --border: #2e3533;
-      --text: #e4e8e6;
-      --muted: #8d9592;
-      --faint: #5a625f;
-      --hover: rgba(255, 255, 255, 0.06);
-      --stripe: rgba(255, 255, 255, 0.025);
-      --accent: #5cc2ae;
-      --accent-soft: rgba(92, 194, 174, 0.45);
-      --selection: #2f7f70;
-      --selection-text: #ffffff;
-      --selection-muted: rgba(92, 194, 174, 0.16);
-      --folder: #5cb3a2;
-      --button: #262c2a;
-    }
+    --bg: #36373c;
+    --pane: #36373c;
+    --sidebar: #2b2c30;
+    --panel: #313236;
+    --well: #2a2b2f;
+    --border: #2a2b2f;
+    --line: #45464b;
+    --text: #f2f2f3;
+    --muted: #c3c4c8;
+    --faint: #8f9095;
+    --hover: rgba(255, 255, 255, 0.06);
+    --stripe: rgba(255, 255, 255, 0.015);
+    --selection: #4c4d53;
+    --selection-muted: #414247;
+    --cursor: rgba(255, 255, 255, 0.16);
+    --cursor-label: #2f6fe4;
+    --cursor-label-text: #ffffff;
+    --active-bar: #f2a33a;
+    --accent: #f2a33a;
+    --blue: #2f6fe4;
+    --folder: #5ab0f5;
+    --file: #e4e5e8;
+    --button: #2b2c30;
+    --button-hover: #3a3b40;
+    --button-on: #4c4d53;
+    color-scheme: dark;
   }
 
   :global(html, body) {
@@ -336,64 +483,158 @@
     color: inherit;
     background: none;
     border: 0;
+    padding: 0;
     cursor: default;
   }
+  :global(::-webkit-scrollbar) {
+    width: 10px;
+    height: 10px;
+  }
+  :global(button:focus) {
+    outline: none;
+  }
+  :global(::-webkit-scrollbar-thumb) {
+    background: #55565c;
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
 
-  main {
+  .app {
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr);
+    height: 100vh;
+  }
+  .app.no-sidebar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .main {
     display: flex;
     flex-direction: column;
-    height: 100vh;
-    padding: 8px;
-    box-sizing: border-box;
-    gap: 8px;
-  }
-  .panes {
-    flex: 1;
+    min-width: 0;
     min-height: 0;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
   }
 
   .toolbar {
+    flex: none;
     display: flex;
     align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
+    gap: 8px;
+    height: 52px;
+    padding: 0 12px;
+    background: var(--bg);
   }
-  .toolbar button,
-  .actions button {
-    padding: 4px 10px;
-    border-radius: 6px;
+  /* The window's traffic lights sit here when the sidebar is hidden. */
+  .no-sidebar .toolbar {
+    padding-left: 84px;
+  }
+  .toolbar h1 {
+    margin: 0 4px;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .flex {
+    flex: 1;
+    align-self: stretch;
+  }
+  .group {
+    flex: none;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 9px;
     background: var(--button);
     border: 1px solid var(--border);
   }
-  .toolbar button:hover:not(:disabled) {
-    border-color: var(--accent-soft);
-  }
-  .toolbar button:disabled {
-    opacity: 0.45;
-  }
-  .toolbar .spacer {
-    flex: 1;
-  }
-  kbd {
-    margin-left: 4px;
-    font: 10px ui-monospace, "SF Mono", monospace;
+  .group button {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 26px;
+    border-radius: 6px;
     color: var(--muted);
+  }
+  .group button:hover:not(:disabled) {
+    background: var(--button-hover);
+    color: var(--text);
+  }
+  .group button.on {
+    background: var(--button-on);
+    color: var(--text);
+  }
+  .group button:disabled {
+    opacity: 0.35;
+  }
+
+  .search {
+    flex: 0 1 220px;
+    min-width: 120px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 9px;
+    background: var(--button);
+    border: 1px solid var(--border);
+    color: var(--faint);
+  }
+  .search:focus-within {
+    border-color: var(--line);
+  }
+  .search input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: none;
+    background: none;
+    color: var(--text);
+    font: inherit;
+  }
+  .search .clear {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--button-on);
+    color: var(--text);
+  }
+
+  .body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .body.with-preview {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+  .panes {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
   }
 
   .toast {
     position: fixed;
     left: 50%;
-    bottom: 52px;
+    bottom: 24px;
     transform: translateX(-50%);
     max-width: min(560px, 90vw);
-    padding: 8px 14px;
+    padding: 9px 14px;
     border-radius: 8px;
-    background: #b3412f;
-    color: white;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--text);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
   }
 
   .backdrop {
@@ -402,15 +643,15 @@
     display: grid;
     place-items: start center;
     padding-top: 18vh;
-    background: rgba(0, 0, 0, 0.25);
+    background: rgba(0, 0, 0, 0.45);
   }
   .dialog {
     width: min(380px, 90vw);
     padding: 16px;
-    border-radius: 10px;
-    background: var(--pane);
-    border: 1px solid var(--border);
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
+    border-radius: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
   }
   .dialog h2 {
     margin: 0 0 10px;
@@ -420,10 +661,10 @@
   .dialog input {
     width: 100%;
     box-sizing: border-box;
-    padding: 6px 8px;
-    border-radius: 6px;
+    padding: 7px 9px;
+    border-radius: 7px;
     border: 1px solid var(--border);
-    background: var(--bg);
+    background: var(--well);
     color: var(--text);
     font: inherit;
     outline: none;
@@ -431,7 +672,7 @@
     user-select: text;
   }
   .dialog input:focus {
-    border-color: var(--accent);
+    border-color: var(--blue);
   }
   .actions {
     display: flex;
@@ -439,10 +680,17 @@
     gap: 8px;
     margin-top: 14px;
   }
+  .actions button {
+    padding: 5px 12px;
+    border-radius: 7px;
+    background: var(--button);
+    border: 1px solid var(--border);
+  }
   .actions .primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: white;
+    background: var(--blue);
+    border-color: var(--blue);
+    color: #fff;
+    font-weight: 500;
   }
   .actions .primary:disabled {
     opacity: 0.5;

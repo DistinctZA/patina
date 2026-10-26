@@ -9,12 +9,12 @@
 **Two panes. Zero lag. No sandbox. Built in Rust.**
 
 <p>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-2f8a7a?style=flat-square" />
+  <img alt="Version" src="https://img.shields.io/badge/version-0.2.0-36373c?style=flat-square" />
   <img alt="Rust" src="https://img.shields.io/badge/Rust-1.85+-b7410e?style=flat-square&logo=rust&logoColor=white" />
   <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white" />
   <img alt="Svelte 5" src="https://img.shields.io/badge/Svelte-5-ff3e00?style=flat-square&logo=svelte&logoColor=white" />
   <img alt="macOS 13+" src="https://img.shields.io/badge/macOS-13+-000000?style=flat-square&logo=apple&logoColor=white" />
-  <img alt="Signed" src="https://img.shields.io/badge/signed-Developer%20ID-5cc2ae?style=flat-square" />
+  <img alt="Signed" src="https://img.shields.io/badge/signed-Developer%20ID-f2a33a?style=flat-square" />
 </p>
 
 <p>
@@ -53,7 +53,12 @@ npm install && npm run tauri dev
 | 🔤 **Natural sorting** | `file 2` before `file 10`; sort by name, size or date, folders first. |
 | ⌨️ **Type to jump** | Start typing a name and the cursor jumps to it. |
 | 🗑️ **Move to Bin** | Deletes go to the Bin, never straight to oblivion. |
-| 🌗 **Light & dark** | Follows your system appearance. |
+| 🗂️ **Sidebar** | Drives with free space, Favourites, and Finder tags. Click a tag to list every file that has it. |
+| 🖼️ **Icon view** | Quick Look thumbnails for photos, PDFs, videos and documents, and real app icons. |
+| 👁️ **Preview panel** | Images, video, audio, text and code, plus size, dates and kind. |
+| 🔐 **Permissions** | See and change read/write/run for owner, group and others. |
+| 🔎 **Search** | Filter the current folder as you type. |
+| 🌑 **Slate dark theme** | Soft greys, an inset sidebar, blue folders and orange accents. |
 
 ## ⌨️ Keyboard shortcuts
 
@@ -73,6 +78,10 @@ npm install && npm run tauri dev
 | Reveal in Finder | <kbd>⌘</kbd><kbd>⌥</kbd><kbd>R</kbd> |
 | Refresh | <kbd>⌘</kbd><kbd>R</kbd> |
 | Select all / clear | <kbd>⌘</kbd><kbd>A</kbd> / <kbd>Esc</kbd> |
+| List / icon view | <kbd>⌘</kbd><kbd>1</kbd> / <kbd>⌘</kbd><kbd>2</kbd> |
+| Search this folder | <kbd>⌘</kbd><kbd>F</kbd> |
+| Show / hide preview | <kbd>⌘</kbd><kbd>⇧</kbd><kbd>P</kbd> |
+| Show / hide sidebar | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>S</kbd> |
 
 > [!TIP]
 > On a MacBook keyboard, hold <kbd>fn</kbd> for the F-keys.
@@ -139,24 +148,30 @@ npm run tauri build -- --bundles app,dmg
 | `src-tauri/src/fs_ops.rs` | Listing, natural sort, copy, move, rename, with tests |
 | `src-tauri/src/lib.rs` | Tauri commands and the folder watcher |
 | `src/lib/pane-state.svelte.ts` | One pane's folder, cursor, selection and history |
-| `src/lib/Pane.svelte` | The pane UI and its virtualized list |
-| `src/routes/+page.svelte` | Layout, toolbar, shortcuts and dialogs |
+| `src-tauri/src/thumbs.rs` | Quick Look thumbnails and app icons, with a disk cache |
+| `src/lib/Pane.svelte` | A pane: list and icon views, both virtualized |
+| `src/lib/Sidebar.svelte` | Drives, favourites and tags |
+| `src/lib/Preview.svelte` | Preview, file info and permissions |
+| `src/routes/+page.svelte` | Layout, toolbar, search, shortcuts and dialogs |
 
 ## 🗺️ Roadmap
 
 - [x] Dual-pane browsing, copy, move, rename, new folder, Bin
 - [x] Live refresh, natural sort, hidden files, type-to-jump
 - [x] Signed, unsandboxed macOS build
+- [x] Sidebar with drives, favourites and tags
+- [x] Icon view, preview panel, permissions editor, search
 - [ ] Tabs in each pane
 - [ ] Quick Open (fuzzy search across folders)
 - [ ] Batch rename
 - [ ] Folder compare & sync
-- [ ] Quick Look previews (<kbd>Space</kbd>)
+- [ ] Full-screen Quick Look (<kbd>Space</kbd>)
+- [ ] Column view
 - [ ] Drag and drop with Finder
 - [ ] Copy progress for large transfers
 
 ---
 
 <div align="center">
-  <sub>Made with 🦀 Rust and a little verdigris.</sub>
+  <sub>Made with 🦀 Rust.</sub>
 </div>

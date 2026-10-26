@@ -1,23 +1,43 @@
 // State for one file pane: the folder it shows, the cursor and the selection.
-import { api, basename, type Entry, type SortBy } from "./api";
+import { api, basename, isApp, type Entry, type SortBy } from "./api";
+
+export type View = "list" | "grid";
+
+/** Locations starting with this show every file carrying a Finder tag. */
+const TAG_PREFIX = "tag:";
 
 export class PaneState {
   readonly id: string;
+  /** A folder path, or `tag:<name>` for a tag search. */
   path = $state("");
   parent = $state<string | null>(null);
-  entries = $state.raw<Entry[]>([]);
+  available = $state<number | null>(null);
+  /** Everything in the folder; `entries` is this after the search filter. */
+  all = $state.raw<Entry[]>([]);
+  filter = $state("");
+  entries = $derived.by(() => {
+    const q = this.filter.trim().toLowerCase();
+    return q ? this.all.filter((e) => e.name.toLowerCase().includes(q)) : this.all;
+  });
   /** Paths of selected entries. Replaced, never mutated, so the UI updates. */
   selected = $state.raw<Set<string>>(new Set());
   cursor = $state(0);
   showHidden = $state(false);
   sortBy = $state<SortBy>("name");
   desc = $state(false);
+  view = $state<View>("list");
   loading = $state(false);
+  /** Items per row in grid view; set by the pane component as it resizes. */
+  columns = 1;
 
   /** Where a shift-selection starts. */
   private anchor = 0;
-  private back: string[] = [];
-  private forward: string[] = [];
+  /** Bumped by every load, so a slow older load can't overwrite a newer one. */
+  private loadId = 0;
+  /** The folder the Rust side is watching for this pane. */
+  private watched = "";
+  private back = $state<string[]>([]);
+  private forward = $state<string[]>([]);
 
   constructor(id: string) {
     this.id = id;
@@ -25,6 +45,19 @@ export class PaneState {
 
   get current(): Entry | undefined {
     return this.entries[this.cursor];
+  }
+
+  get tag(): string | null {
+    return this.path.startsWith(TAG_PREFIX) ? this.path.slice(TAG_PREFIX.length) : null;
+  }
+
+  /** False for tag searches, which can't receive copies or new folders. */
+  get isFolder(): boolean {
+    return this.tag === null;
+  }
+
+  get title() {
+    return this.tag ?? basename(this.path);
   }
 
   /** The selected entries, or the one under the cursor when nothing is selected. */
@@ -35,13 +68,19 @@ export class PaneState {
   }
 
   /**
-   * Shows `path`. `focus` puts the cursor on that entry (by path); `keep`
-   * preserves the cursor and selection, for refreshes.
+   * Shows `location`. `focus` puts the cursor on that entry (by path); `keep`
+   * preserves the cursor, selection and search, for refreshes.
    */
-  async load(path: string, opts: { focus?: string; keep?: boolean; history?: boolean } = {}) {
+  async load(location: string, opts: { focus?: string; keep?: boolean; history?: boolean } = {}) {
+    const id = ++this.loadId;
     this.loading = true;
     try {
-      const listing = await api.listDir(path, this.showHidden, this.sortBy, this.desc);
+      const tag = location.startsWith(TAG_PREFIX) ? location.slice(TAG_PREFIX.length) : null;
+      const listing = tag
+        ? await api.findTagged(tag, this.showHidden, this.sortBy, this.desc)
+        : await api.listDir(location, this.showHidden, this.sortBy, this.desc);
+      if (id !== this.loadId) return;
+
       if (opts.history !== false && this.path && listing.path !== this.path) {
         this.back.push(this.path);
         this.forward = [];
@@ -49,21 +88,28 @@ export class PaneState {
       const cursorPath = opts.focus ?? (opts.keep ? this.current?.path : undefined);
       const stillThere = new Set(listing.entries.map((e) => e.path));
 
+      if (!opts.keep) this.filter = "";
       this.path = listing.path;
       this.parent = listing.parent;
-      this.entries = listing.entries;
+      this.available = listing.available;
+      this.all = listing.entries;
 
-      const found = cursorPath ? listing.entries.findIndex((e) => e.path === cursorPath) : -1;
-      this.cursor = found >= 0 ? found : opts.keep ? Math.min(this.cursor, listing.entries.length - 1) : 0;
+      const found = cursorPath ? this.entries.findIndex((e) => e.path === cursorPath) : -1;
+      this.cursor = found >= 0 ? found : opts.keep ? Math.min(this.cursor, this.entries.length - 1) : 0;
       this.cursor = Math.max(0, this.cursor);
       this.anchor = this.cursor;
       this.selected = opts.keep
         ? new Set([...this.selected].filter((p) => stillThere.has(p)))
         : new Set();
 
-      await api.watchDir(this.id, listing.path);
+      // Watching is a nicety: if it fails (e.g. no permission) the listing
+      // still shows, it just won't refresh by itself.
+      if (!tag && listing.path !== this.watched) {
+        this.watched = listing.path;
+        api.watchDir(this.id, listing.path).catch(() => (this.watched = ""));
+      }
     } finally {
-      this.loading = false;
+      if (id === this.loadId) this.loading = false;
     }
   }
 
@@ -73,6 +119,14 @@ export class PaneState {
 
   goUp() {
     if (this.parent) return this.load(this.parent, { focus: this.path });
+  }
+
+  get canGoBack() {
+    return this.back.length > 0;
+  }
+
+  get canGoForward() {
+    return this.forward.length > 0;
   }
 
   goBack() {
@@ -91,7 +145,9 @@ export class PaneState {
 
   open(entry: Entry | undefined = this.current) {
     if (!entry) return;
-    return entry.isDir ? this.load(entry.path) : api.openPath(entry.path);
+    // Apps are folders on disk but should launch, not open as a folder.
+    if (entry.isDir && !isApp(entry)) return this.load(entry.path);
+    return api.openPath(entry.path);
   }
 
   setSort(by: SortBy) {
@@ -106,6 +162,13 @@ export class PaneState {
   toggleHidden() {
     this.showHidden = !this.showHidden;
     return this.refresh();
+  }
+
+  setFilter(text: string) {
+    this.filter = text;
+    this.cursor = 0;
+    this.anchor = 0;
+    this.selected = new Set();
   }
 
   moveCursor(to: number, extend = false) {
@@ -148,10 +211,6 @@ export class PaneState {
     const p = prefix.toLowerCase();
     const i = this.entries.findIndex((e) => e.name.toLowerCase().startsWith(p));
     if (i >= 0) this.moveCursor(i);
-  }
-
-  get title() {
-    return basename(this.path);
   }
 
   private selectRange(a: number, b: number) {
