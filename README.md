@@ -22,6 +22,7 @@
   <a href="#%EF%B8%8F-keyboard-shortcuts"><b>Shortcuts</b></a> ·
   <a href="#-quick-start"><b>Quick start</b></a> ·
   <a href="#-install-on-your-mac"><b>Install</b></a> ·
+  <a href="#%EF%B8%8F-versions-and-releases"><b>Releases</b></a> ·
   <a href="#-how-it-works"><b>How it works</b></a> ·
   <a href="#-roadmap"><b>Roadmap</b></a>
 </p>
@@ -116,11 +117,15 @@ The file-type icons are copied from the `material-icon-theme` package by `npm ru
 
 ## 📦 Install on your Mac
 
+Download the latest `.dmg` from **[Releases](https://github.com/DistinctZA/patina/releases)**, open it, and drag Patina into **Applications**.
+
+Or build it yourself:
+
 ```bash
-npm run tauri build -- --bundles app,dmg
+npm run tauri build -- --bundles app
 ```
 
-Drag `src-tauri/target/release/bundle/macos/Patina.app` into **Applications**. The build is signed with the Developer ID certificate named in `src-tauri/tauri.conf.json`, so it opens without Gatekeeper warnings on this Mac.
+and drag `src-tauri/target/release/bundle/macos/Patina.app` into **Applications**. Builds are signed with the Developer ID certificate named in `src-tauri/tauri.conf.json`, so they open without Gatekeeper warnings on this Mac.
 
 > [!IMPORTANT]
 > macOS asks once per protected folder (Desktop, Documents, Downloads, external drives). To skip those prompts entirely, add Patina under **System Settings → Privacy & Security → Full Disk Access**. Every build is signed with the same certificate, so the permission survives rebuilds.
@@ -140,6 +145,17 @@ npm run tauri build -- --bundles app,dmg
 ```
 
 </details>
+
+## 🏷️ Versions and releases
+
+Patina uses [semantic versioning](https://semver.org): **MAJOR.MINOR.PATCH**. New features bump the minor number (0.3.0 → 0.4.0) and fixes bump the patch number (0.4.0 → 0.4.1). Every push to GitHub is a release:
+
+```bash
+npm run release -- minor            # or: patch, major
+npm run release -- minor --dry-run  # preview the version and notes
+```
+
+The script bumps the version everywhere it appears, runs the checks and tests, builds the signed app and a signed `.dmg`, then commits, tags `vX.Y.Z`, pushes, and publishes a [GitHub Release](https://github.com/DistinctZA/patina/releases) with the `.dmg` and notes from the commits since the last release.
 
 ## 🧠 How it works
 
@@ -167,6 +183,7 @@ npm run tauri build -- --bundles app,dmg
 | `src/lib/Sidebar.svelte` | Drives, favourites (drag to add or reorder) and tags |
 | `src/lib/Preview.svelte` | Preview and the customisable Info section |
 | `src/routes/+page.svelte` | Layout, toolbar, search, shortcuts and dialogs |
+| `scripts/release.mjs` | Version bump, signed build and `.dmg`, tag and GitHub Release |
 
 ## 🗺️ Roadmap
 
