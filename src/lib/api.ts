@@ -48,15 +48,30 @@ export type Details = {
 
 export type TextPreview = { text: string; truncated: boolean };
 
+/** Saved between launches, in ~/Library/Application Support/com.distinctza.patina. */
+export type Settings = {
+  /** The user's Favourites, in order; absent means the default set. */
+  favorites?: string[];
+  /** Sidebar sections the user has folded away. */
+  collapsed?: string[];
+  /** Which details the preview panel's Info section shows. */
+  previewFields?: string[];
+  /** Sidebar sections switched off from the right-click menu. */
+  hiddenSections?: string[];
+  /** Recently visited folders, newest first. */
+  recents?: string[];
+};
+
 export const api = {
   homeDir: () => invoke<string>("home_dir"),
   listDir: (path: string, showHidden: boolean, sortBy: SortBy, desc: boolean) =>
     invoke<Listing>("list_dir", { path, showHidden, sortBy, desc }),
   findTagged: (tag: string, showHidden: boolean, sortBy: SortBy, desc: boolean) =>
     invoke<Listing>("find_tagged", { tag, showHidden, sortBy, desc }),
-  sidebar: () => invoke<SidebarData>("sidebar"),
+  sidebar: (favorites: string[] | null) => invoke<SidebarData>("sidebar", { favorites }),
+  readSettings: () => invoke<Settings>("read_settings"),
+  writeSettings: (settings: Settings) => invoke<void>("write_settings", { settings }),
   details: (path: string) => invoke<Details>("details", { path }),
-  setMode: (path: string, mode: number) => invoke<void>("set_mode", { path, mode }),
   readText: (path: string) => invoke<TextPreview | null>("read_text", { path }),
   thumbnail: (path: string, size: number) => invoke<string | null>("thumbnail", { path, size }),
   copyInto: (sources: string[], dest: string) => invoke<void>("copy_into", { sources, dest }),

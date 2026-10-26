@@ -60,19 +60,46 @@ async fn find_tagged(tag: String, show_hidden: bool, sort_by: String, desc: bool
 }
 
 #[tauri::command]
-async fn sidebar(app: AppHandle) -> Result<Sidebar, String> {
+async fn sidebar(app: AppHandle, favorites: Option<Vec<String>>) -> Result<Sidebar, String> {
     let home = app.path().home_dir().map_err(|e| e.to_string())?;
-    blocking(move || Ok(fs_ops::sidebar(&home))).await
+    blocking(move || Ok(fs_ops::sidebar(&home, favorites.as_deref()))).await
+}
+
+fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_config_dir().map_err(|e| e.to_string())?.join("settings.json"))
+}
+
+/// The UI's saved settings (favourites, collapsed sidebar sections), or an
+/// empty object on first run. Kept in ~/Library/Application Support/<id>.
+#[tauri::command]
+async fn read_settings(app: AppHandle) -> Result<serde_json::Value, String> {
+    let path = settings_path(&app)?;
+    blocking(move || match std::fs::read(&path) {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_else(|_| serde_json::json!({}))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::json!({})),
+        Err(e) => Err(e),
+    })
+    .await
+}
+
+#[tauri::command]
+async fn write_settings(app: AppHandle, settings: serde_json::Value) -> Result<(), String> {
+    let path = settings_path(&app)?;
+    blocking(move || {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        // Write then rename, so a crash mid-save can't leave a half-written file.
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&settings)?)?;
+        std::fs::rename(&tmp, &path)
+    })
+    .await
 }
 
 #[tauri::command]
 async fn details(path: String) -> Result<Details, String> {
     blocking(move || fs_ops::details(Path::new(&path))).await
-}
-
-#[tauri::command]
-async fn set_mode(path: String, mode: u32) -> Result<(), String> {
-    blocking(move || fs_ops::set_mode(Path::new(&path), mode)).await
 }
 
 #[tauri::command]
@@ -179,8 +206,9 @@ pub fn run() {
             list_dir,
             find_tagged,
             sidebar,
+            read_settings,
+            write_settings,
             details,
-            set_mode,
             read_text,
             thumbnail,
             copy_into,

@@ -1,14 +1,16 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
     ChevronLeft,
     ChevronRight,
+    Columns3,
     Copy,
     Eye,
     EyeOff,
     FolderInput,
     FolderPlus,
+    GalleryHorizontalEnd,
     LayoutGrid,
     List,
     PanelLeft,
@@ -19,10 +21,12 @@
     Trash,
     X,
   } from "@lucide/svelte";
-  import { api, type SidebarData } from "$lib/api";
-  import { PaneState } from "$lib/pane-state.svelte";
+  import { api, isApp, type Settings, type SidebarData } from "$lib/api";
+  import { drag, setDropHandler } from "$lib/drag.svelte";
+  import { PaneState, type View } from "$lib/pane-state.svelte";
   import Pane from "$lib/Pane.svelte";
   import Preview from "$lib/Preview.svelte";
+  import FileIcon from "$lib/FileIcon.svelte";
   import Sidebar from "$lib/Sidebar.svelte";
 
   const left = new PaneState("left");
@@ -35,6 +39,9 @@
 
   let home = $state("");
   let sidebarData = $state<SidebarData | null>(null);
+  let settings = $state<Settings>({});
+  /** False until saved settings are read, so nothing overwrites them on startup. */
+  let settingsReady = $state(false);
   let showSidebar = $state(true);
   let showPreview = $state(true);
   let searchInput = $state<HTMLInputElement>();
@@ -165,6 +172,8 @@
 
     const pane = active;
     const grid = pane.view === "grid";
+    const columns = pane.view === "columns";
+    const sideways = grid || pane.view === "gallery";
     const step = grid ? pane.columns : 1;
     const page = Math.max(1, Math.floor((window.innerHeight - 200) / (grid ? 132 : 26)) - 1) * step;
     const cmd = e.metaKey;
@@ -194,10 +203,17 @@
         case e.key === "ArrowUp":
           pane.moveCursor(pane.cursor - step, e.shiftKey);
           return true;
-        case e.key === "ArrowRight" && grid:
+        // Columns: right opens the folder, left goes back to its parent.
+        case e.key === "ArrowRight" && columns:
+          if (pane.current?.isDir && !isApp(pane.current)) run(async () => pane.open());
+          return true;
+        case e.key === "ArrowLeft" && columns:
+          run(async () => pane.goUp());
+          return true;
+        case e.key === "ArrowRight" && sideways:
           pane.moveCursor(pane.cursor + 1, e.shiftKey);
           return true;
-        case e.key === "ArrowLeft" && grid:
+        case e.key === "ArrowLeft" && sideways:
           pane.moveCursor(pane.cursor - 1, e.shiftKey);
           return true;
         case e.key === "PageDown":
@@ -246,11 +262,8 @@
         case e.code === "KeyS" && cmd && e.ctrlKey:
           showSidebar = !showSidebar;
           return true;
-        case (e.code === "Digit1" || e.key === "1") && cmd:
-          pane.view = "list";
-          return true;
-        case (e.code === "Digit2" || e.key === "2") && cmd:
-          pane.view = "grid";
+        case /^[1-4]$/.test(e.key) && cmd:
+          pane.view = VIEWS[Number(e.key) - 1].view;
           return true;
         case e.key === "f" && cmd:
           searchInput?.focus();
@@ -281,9 +294,111 @@
 
   const loadSidebar = () =>
     api
-      .sidebar()
+      .sidebar(settings.favorites ?? null)
       .then((d) => (sidebarData = d))
       .catch(showError);
+
+  function saveSettings(next: Settings) {
+    settings = next;
+    if (settingsReady) api.writeSettings(next).catch(showError);
+  }
+
+  /** The Favourites as shown, so the first edit starts from the defaults. */
+  const favoritePaths = () => sidebarData?.favorites.map((f) => f.path) ?? [];
+
+  function setFavorites(paths: string[]) {
+    saveSettings({ ...settings, favorites: paths });
+    loadSidebar();
+  }
+
+  /** Adds folders at `index` (or the end); ones already there just move. */
+  function addFavorites(paths: string[], index: number | null) {
+    const list = favoritePaths().filter((p) => !paths.includes(p));
+    const at = Math.min(index ?? list.length, list.length);
+    list.splice(at, 0, ...paths);
+    setFavorites(list);
+  }
+
+  function moveFavorite(from: number, to: number | null) {
+    const list = favoritePaths();
+    const [item] = list.splice(from, 1);
+    if (item === undefined) return;
+    // Dropping below its old slot shifts the target up by one.
+    const at = to == null ? list.length : to > from ? to - 1 : to;
+    list.splice(at, 0, item);
+    setFavorites(list);
+  }
+
+  function removeFavorite(path: string) {
+    setFavorites(favoritePaths().filter((p) => p !== path));
+  }
+
+  function resetFavorites() {
+    const { favorites: _, ...rest } = settings;
+    saveSettings(rest);
+    loadSidebar();
+  }
+
+  /** Shows or hides a whole sidebar section (from its right-click menu). */
+  function showSection(name: string) {
+    const hidden = settings.hiddenSections ?? [];
+    saveSettings({
+      ...settings,
+      hiddenSections: hidden.includes(name) ? hidden.filter((n) => n !== name) : [...hidden, name],
+    });
+  }
+
+  /** Puts a folder at the top of Recents, unless the sidebar already lists it. */
+  function remember(path: string) {
+    if (!settingsReady || !path || path.startsWith("tag:")) return;
+    const pinned = [...(sidebarData?.favorites ?? []), ...(sidebarData?.volumes ?? [])];
+    if (pinned.some((p) => p.path === path)) return;
+    const recents = settings.recents ?? [];
+    if (recents[0] === path) return;
+    saveSettings({ ...settings, recents: [path, ...recents.filter((p) => p !== path)].slice(0, 8) });
+  }
+
+  // A folder counts as visited once you stay in it for a moment, so the ones
+  // you pass through on the way somewhere don't fill up Recents.
+  const rememberTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+  function rememberSoon(pane: PaneState) {
+    const path = pane.path;
+    clearTimeout(rememberTimers[pane.id]);
+    rememberTimers[pane.id] = setTimeout(() => pane.path === path && remember(path), 1500);
+  }
+
+  $effect(() => {
+    void left.path;
+    untrack(() => rememberSoon(left));
+  });
+  $effect(() => {
+    void right.path;
+    untrack(() => rememberSoon(right));
+  });
+
+  function toggleSection(name: string) {
+    const collapsed = settings.collapsed ?? [];
+    saveSettings({
+      ...settings,
+      collapsed: collapsed.includes(name) ? collapsed.filter((n) => n !== name) : [...collapsed, name],
+    });
+  }
+
+  setDropHandler((payload, zone, index) => {
+    if (zone !== "favorites") return;
+    if (payload.kind === "favorite") return moveFavorite(payload.index, index);
+    const folders = payload.entries.filter((e) => e.isDir && !isApp(e)).map((e) => e.path);
+    if (folders.length) addFavorites(folders, index);
+    else showError("Only folders can be added to Favourites.");
+  });
+
+  const VIEWS: { view: View; label: string; key: string }[] = [
+    { view: "grid", label: "Icons", key: "⌘1" },
+    { view: "list", label: "List", key: "⌘2" },
+    { view: "columns", label: "Columns", key: "⌘3" },
+    { view: "gallery", label: "Gallery", key: "⌘4" },
+  ];
+  const VIEW_ICONS = { grid: LayoutGrid, list: List, columns: Columns3, gallery: GalleryHorizontalEnd };
 
   onMount(() => {
     // Refresh a pane shortly after its folder changes on disk; bursts of
@@ -305,7 +420,14 @@
       timers.volumes = setTimeout(loadSidebar, 500);
     });
 
-    loadSidebar();
+    api
+      .readSettings()
+      .then((saved) => (settings = saved))
+      .catch(() => {})
+      .finally(() => {
+        settingsReady = true;
+        loadSidebar();
+      });
     api
       .homeDir()
       .then((h) => {
@@ -323,7 +445,12 @@
   const hasTargets = $derived(active.selected.size > 0 || !!active.current);
 </script>
 
-<svelte:window onkeydown={onKey} />
+<!-- The webview's own menu (Reload, Inspect…) isn't useful here; text keeps it
+     for copy and paste. -->
+<svelte:window
+  onkeydown={onKey}
+  oncontextmenu={(e) => !(e.target as Element).closest("input, textarea, pre") && e.preventDefault()}
+/>
 <svelte:head><title>Patina — {active.title}</title></svelte:head>
 
 <!-- Clicking a button keeps keyboard focus on the panes (no focus ring, and
@@ -335,7 +462,20 @@
   onmousedown={(e) => (e.target as Element).closest("button") && e.preventDefault()}
 >
   {#if showSidebar}
-    <Sidebar data={sidebarData} current={active.path} onopen={openLocation} />
+    <Sidebar
+      data={sidebarData}
+      current={active.path}
+      collapsed={settings.collapsed ?? []}
+      hidden={settings.hiddenSections ?? []}
+      recents={settings.recents ?? []}
+      customFavorites={settings.favorites != null}
+      onopen={openLocation}
+      ontoggle={toggleSection}
+      onremove={removeFavorite}
+      onshow={showSection}
+      onresetfavorites={resetFavorites}
+      onclearrecents={() => saveSettings({ ...settings, recents: [] })}
+    />
   {/if}
 
   <div class="main">
@@ -353,12 +493,12 @@
       <span class="flex" data-tauri-drag-region></span>
 
       <div class="group">
-        <button class:on={active.view === "grid"} onclick={() => (active.view = "grid")} title="Icons (⌘2)">
-          <LayoutGrid size={16} />
-        </button>
-        <button class:on={active.view === "list"} onclick={() => (active.view = "list")} title="List (⌘1)">
-          <List size={16} />
-        </button>
+        {#each VIEWS as v (v.view)}
+          {@const Icon = VIEW_ICONS[v.view]}
+          <button class:on={active.view === v.view} onclick={() => (active.view = v.view)} title="{v.label} ({v.key})">
+            <Icon size={16} />
+          </button>
+        {/each}
       </div>
 
       <div class="group">
@@ -409,10 +549,31 @@
         <Pane pane={right} {home} active={activeId === "right"} onactivate={() => (activeId = "right")} />
       </div>
       {#if showPreview}
-        <Preview entry={active.current} onerror={showError} />
+        <Preview
+          entry={active.current}
+          fields={settings.previewFields}
+          onfields={(previewFields) => saveSettings({ ...settings, previewFields })}
+          onerror={showError}
+        />
       {/if}
     </div>
   </div>
+
+  {#if drag.payload}
+    {@const p = drag.payload}
+    {@const label =
+      p.kind === "favorite"
+        ? (sidebarData?.favorites[p.index]?.name ?? "")
+        : p.entries.length === 1
+          ? p.entries[0].name
+          : `${p.entries.length} items`}
+    {@const refused =
+      drag.over === "favorites" && p.kind === "entries" && !p.entries.some((e) => e.isDir && !isApp(e))}
+    <div class="ghost" class:refused style:left="{drag.x + 14}px" style:top="{drag.y + 10}px">
+      {#if p.kind === "entries"}<FileIcon entry={p.entries[0]} size={16} />{/if}
+      <span>{label}</span>
+    </div>
+  {/if}
 
   {#if toast}
     <div class="toast" role="alert">{toast}</div>
@@ -437,7 +598,7 @@
 </div>
 
 <style>
-  /* Slate greys with a darker inset sidebar; blue folders, orange accents. */
+  /* Slate greys with a darker inset sidebar; purple sidebar icons, orange accents. */
   :global(:root) {
     --bg: #36373c;
     --pane: #36373c;
@@ -458,6 +619,7 @@
     --cursor-label-text: #ffffff;
     --active-bar: #f2a33a;
     --accent: #f2a33a;
+    --sidebar-icon: #b48cff;
     --blue: #2f6fe4;
     --folder: #5ab0f5;
     --file: #e4e5e8;
@@ -491,6 +653,11 @@
     height: 10px;
   }
   :global(button:focus) {
+    outline: none;
+  }
+  /* Rows and tiles take focus when clicked; the cursor highlight already
+     shows where you are, so the browser's focus ring would be a second one. */
+  :global([tabindex="-1"]:focus) {
     outline: none;
   }
   :global(::-webkit-scrollbar-thumb) {
@@ -613,7 +780,8 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .body.with-preview {
-    grid-template-columns: minmax(0, 1fr) 320px;
+    /* The preview panel widens on bigger windows. */
+    grid-template-columns: minmax(0, 1fr) clamp(280px, 24vw, 440px);
   }
   .panes {
     min-height: 0;
@@ -621,6 +789,34 @@
     grid-template-columns: 1fr 1fr;
     gap: 1px;
     background: var(--border);
+  }
+
+  .ghost {
+    position: fixed;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 260px;
+    padding: 4px 10px;
+    border-radius: 7px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    font-size: 12px;
+    pointer-events: none;
+  }
+  .ghost span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ghost.refused {
+    opacity: 0.55;
+  }
+  :global(body.dragging),
+  :global(body.dragging *) {
+    cursor: grabbing !important;
   }
 
   .toast {

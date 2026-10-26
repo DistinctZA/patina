@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { File, FileArchive, FileCode, FileImage, FileMusic, FilePlay, Folder } from "@lucide/svelte";
-  import { entryKey, isApp, mediaOf, thumbnailUrl, wantsThumbnail, type Entry } from "./api";
+  import { entryKey, isApp, thumbnailUrl, wantsThumbnail, type Entry } from "./api";
+  import { materialIcon } from "./material";
 
   let {
     entry,
@@ -9,30 +9,14 @@
     thumbnail = false,
   }: { entry: Entry; size?: number; thumbnail?: boolean } = $props();
 
-  const Icon = $derived.by(() => {
-    if (entry.isDir) return Folder;
-    switch (mediaOf(entry)) {
-      case "image":
-        return FileImage;
-      case "video":
-        return FilePlay;
-      case "audio":
-        return FileMusic;
-      case "archive":
-        return FileArchive;
-      case "code":
-        return FileCode;
-      default:
-        return File;
-    }
-  });
-
   let url = $state<string | null>(null);
 
   // Apps always show their real icon, even in the list.
   const show = $derived((thumbnail || isApp(entry)) && wantsThumbnail(entry));
   // Re-listing a folder makes new entry objects; only reload when the file changed.
   const key = $derived(show ? `${entryKey(entry)}|${size}` : "");
+  // Large type icons look heavy next to real thumbnails, so draw them smaller.
+  const iconSize = $derived(thumbnail && size > 32 ? Math.round(size * 0.66) : size);
 
   $effect(() => {
     url = null;
@@ -45,27 +29,27 @@
 </script>
 
 {#if url}
-  <img src={url} alt="" draggable="false" style:max-width="{size}px" style:max-height="{size}px" />
+  <img class="thumb" src={url} alt="" draggable="false" style:max-width="{size}px" style:max-height="{size}px" />
+{:else if isApp(entry)}
+  <!-- Holds the space while the app's own icon loads. -->
+  <span class="blank" style:width="{size}px" style:height="{size}px"></span>
 {:else}
-  <span class="icon" class:folder={entry.isDir} style:width="{size}px" style:height="{size}px">
-    <Icon size={size * (thumbnail ? 0.62 : 1)} strokeWidth={thumbnail ? 1.25 : 1.75} fill={entry.isDir ? "currentColor" : "none"} />
+  <span class="icon" style:width="{size}px" style:height="{size}px">
+    <img src={materialIcon(entry)} alt="" draggable="false" width={iconSize} height={iconSize} />
   </span>
 {/if}
 
 <style>
-  img {
+  .thumb {
     display: block;
     object-fit: contain;
     /* Follows the image's shape, so transparent app icons don't get a box. */
     filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.4));
   }
-  .icon {
+  .icon,
+  .blank {
     flex: none;
     display: inline-grid;
     place-items: center;
-    color: var(--file);
-  }
-  .icon.folder {
-    color: var(--folder);
   }
 </style>

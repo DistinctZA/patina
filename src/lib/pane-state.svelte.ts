@@ -1,7 +1,7 @@
 // State for one file pane: the folder it shows, the cursor and the selection.
 import { api, basename, isApp, type Entry, type SortBy } from "./api";
 
-export type View = "list" | "grid";
+export type View = "grid" | "list" | "columns" | "gallery";
 
 /** Locations starting with this show every file carrying a Finder tag. */
 const TAG_PREFIX = "tag:";

@@ -1,7 +1,10 @@
 <script lang="ts">
   import { ChevronRight, Folder, HardDrive, House, Tag } from "@lucide/svelte";
   import { TAG_COLORS, formatDate, formatSize, type SortBy } from "./api";
+  import ColumnView from "./ColumnView.svelte";
+  import { startDrag } from "./drag.svelte";
   import FileIcon from "./FileIcon.svelte";
+  import GalleryView from "./GalleryView.svelte";
   import type { PaneState } from "./pane-state.svelte";
 
   let {
@@ -76,6 +79,12 @@
     scrollTop = viewport.scrollTop;
   });
 
+  /** Select on press; dragging afterwards carries the selection. */
+  function pickRow(index: number, e: MouseEvent) {
+    pane.click(index, e);
+    startDrag(e, () => ({ kind: "entries", entries: pane.targets() }));
+  }
+
   const columns: { key: SortBy; label: string }[] = [
     { key: "name", label: "Name" },
     { key: "size", label: "Size" },
@@ -97,7 +106,7 @@
     </div>
   </header>
 
-  {#if !grid}
+  {#if pane.view === "list"}
     <div class="header row-grid">
       {#each columns as col (col.key)}
         <button class="col" class:sorted={pane.sortBy === col.key} onclick={() => pane.setSort(col.key)}>
@@ -108,69 +117,75 @@
     </div>
   {/if}
 
-  <div
-    class="list"
-    bind:this={viewport}
-    bind:clientHeight={height}
-    bind:clientWidth={width}
-    onscroll={() => (scrollTop = viewport!.scrollTop)}
-  >
-    <div class="spacer" style:height="{rows * rowH + (grid ? 12 : 0)}px">
-      {#each visible as entry, i (entry.path)}
-        {@const index = first + i}
-        {#if grid}
-          <div
-            class="cell"
-            class:cursor={index === pane.cursor}
-            class:selected={pane.selected.has(entry.path)}
-            class:hidden-file={entry.isHidden}
-            style:transform="translate({gridPad + (index % perRow) * CELL_W}px, {Math.floor(index / perRow) * CELL_H + 8}px)"
-            onmousedown={(e) => pane.click(index, e)}
-            ondblclick={() => pane.open(entry)}
-            role="gridcell"
-            tabindex="-1"
-          >
-            <div class="thumb"><FileIcon {entry} size={THUMB} thumbnail /></div>
-            <span class="cell-name" title={entry.name}>{entry.name}</span>
-            {#if entry.tags.some((t) => t.color)}
-              <span class="tags">
+  {#if pane.view === "columns"}
+    <ColumnView {pane} {home} {active} />
+  {:else if pane.view === "gallery"}
+    <GalleryView {pane} {active} />
+  {:else}
+    <div
+      class="list"
+      bind:this={viewport}
+      bind:clientHeight={height}
+      bind:clientWidth={width}
+      onscroll={() => (scrollTop = viewport!.scrollTop)}
+    >
+      <div class="spacer" style:height="{rows * rowH + (grid ? 12 : 0)}px">
+        {#each visible as entry, i (entry.path)}
+          {@const index = first + i}
+          {#if grid}
+            <div
+              class="cell"
+              class:cursor={index === pane.cursor}
+              class:selected={pane.selected.has(entry.path)}
+              class:hidden-file={entry.isHidden}
+              style:transform="translate({gridPad + (index % perRow) * CELL_W}px, {Math.floor(index / perRow) * CELL_H + 8}px)"
+              onmousedown={(e) => pickRow(index, e)}
+              ondblclick={() => pane.open(entry)}
+              role="gridcell"
+              tabindex="-1"
+            >
+              <div class="thumb"><FileIcon {entry} size={THUMB} thumbnail /></div>
+              <span class="cell-name" title={entry.name}>{entry.name}</span>
+              {#if entry.tags.some((t) => t.color)}
+                <span class="tags">
+                  {#each entry.tags.filter((t) => t.color) as t (t.name)}
+                    <span class="dot" style:background={TAG_COLORS[t.color]}></span>
+                  {/each}
+                </span>
+              {/if}
+            </div>
+          {:else}
+            <div
+              class="row row-grid"
+              class:stripe={index % 2 === 1}
+              class:cursor={index === pane.cursor}
+              class:selected={pane.selected.has(entry.path)}
+              class:hidden-file={entry.isHidden}
+              style:transform="translateY({index * ROW}px)"
+              onmousedown={(e) => pickRow(index, e)}
+              ondblclick={() => pane.open(entry)}
+              role="row"
+              tabindex="-1"
+            >
+              <span class="name">
+                <FileIcon {entry} size={16} />
+                <span class="label">{entry.name}</span>
+                {#if entry.isSymlink}<span class="link" title="Alias">↗</span>{/if}
                 {#each entry.tags.filter((t) => t.color) as t (t.name)}
-                  <span class="dot" style:background={TAG_COLORS[t.color]}></span>
+                  <span class="dot" style:background={TAG_COLORS[t.color]} title={t.name}></span>
                 {/each}
               </span>
-            {/if}
-          </div>
-        {:else}
-          <div
-            class="row row-grid"
-            class:stripe={index % 2 === 1}
-            class:cursor={index === pane.cursor}
-            class:selected={pane.selected.has(entry.path)}
-            class:hidden-file={entry.isHidden}
-            style:transform="translateY({index * ROW}px)"
-            onmousedown={(e) => pane.click(index, e)}
-            ondblclick={() => pane.open(entry)}
-            role="row"
-            tabindex="-1"
-          >
-            <span class="name">
-              <FileIcon {entry} size={16} />
-              <span class="label">{entry.name}</span>
-              {#if entry.isSymlink}<span class="link" title="Alias">↗</span>{/if}
-              {#each entry.tags.filter((t) => t.color) as t (t.name)}
-                <span class="dot" style:background={TAG_COLORS[t.color]} title={t.name}></span>
-              {/each}
-            </span>
-            <span class="size">{entry.isDir ? "—" : formatSize(entry.size)}</span>
-            <span class="date">{formatDate(entry.modified)}</span>
-          </div>
-        {/if}
-      {/each}
+              <span class="size">{entry.isDir ? "—" : formatSize(entry.size)}</span>
+              <span class="date">{formatDate(entry.modified)}</span>
+            </div>
+          {/if}
+        {/each}
+      </div>
+      {#if !pane.entries.length && !pane.loading}
+        <p class="empty">{pane.filter ? "No matches" : pane.tag ? "No files with this tag" : "This folder is empty"}</p>
+      {/if}
     </div>
-    {#if !pane.entries.length && !pane.loading}
-      <p class="empty">{pane.filter ? "No matches" : pane.tag ? "No files with this tag" : "This folder is empty"}</p>
-    {/if}
-  </div>
+  {/if}
 </section>
 
 <style>

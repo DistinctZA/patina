@@ -32,7 +32,15 @@ npm install && npm run tauri dev
 
 <br />
 
-<img src="docs/screenshot.png" width="900" alt="Patina showing two folders side by side" />
+<img src="docs/screenshot-icons.png" width="900" alt="Patina with this project in List view and the Mac's apps in Icons view, previewing Calculator" />
+
+<sub><b>List + Icons</b>: file-type icons on the left, real app icons on the right, and the preview panel.</sub>
+
+<br /><br />
+
+<img src="docs/screenshot-columns.png" width="900" alt="Patina with source code in Columns view and wallpapers in Gallery view, previewing code" />
+
+<sub><b>Columns + Gallery</b>: browsing source code with a live code preview, next to the built-in wallpapers.</sub>
 
 </div>
 
@@ -53,12 +61,12 @@ npm install && npm run tauri dev
 | 🔤 **Natural sorting** | `file 2` before `file 10`; sort by name, size or date, folders first. |
 | ⌨️ **Type to jump** | Start typing a name and the cursor jumps to it. |
 | 🗑️ **Move to Bin** | Deletes go to the Bin, never straight to oblivion. |
-| 🗂️ **Sidebar** | Drives with free space, Favourites, and Finder tags. Click a tag to list every file that has it. |
-| 🖼️ **Icon view** | Quick Look thumbnails for photos, PDFs, videos and documents, and real app icons. |
-| 👁️ **Preview panel** | Images, video, audio, text and code, plus size, dates and kind. |
-| 🔐 **Permissions** | See and change read/write/run for owner, group and others. |
+| 🗂️ **Sidebar** | Drives with free space, Favourites, Recents and Finder tags. Drag folders in to add Favourites, drag to reorder, fold sections, or right-click to choose which ones show. |
+| 🪟 **Four views** | Icons (Quick Look thumbnails and real app icons), List, Columns and Gallery, per pane. |
+| 🎨 **File-type icons** | The Material Icon Theme: a distinct icon for 1,300+ file types and named folders. |
+| 👁️ **Preview panel** | Images, video, audio, text and code, plus an Info section where you choose which details to show. |
 | 🔎 **Search** | Filter the current folder as you type. |
-| 🌑 **Slate dark theme** | Soft greys, an inset sidebar, blue folders and orange accents. |
+| 🌑 **Slate dark theme** | Soft greys, an inset sidebar with purple icons, and orange accents. |
 
 ## ⌨️ Keyboard shortcuts
 
@@ -78,7 +86,8 @@ npm install && npm run tauri dev
 | Reveal in Finder | <kbd>⌘</kbd><kbd>⌥</kbd><kbd>R</kbd> |
 | Refresh | <kbd>⌘</kbd><kbd>R</kbd> |
 | Select all / clear | <kbd>⌘</kbd><kbd>A</kbd> / <kbd>Esc</kbd> |
-| List / icon view | <kbd>⌘</kbd><kbd>1</kbd> / <kbd>⌘</kbd><kbd>2</kbd> |
+| Icons / List / Columns / Gallery | <kbd>⌘</kbd><kbd>1</kbd> / <kbd>⌘</kbd><kbd>2</kbd> / <kbd>⌘</kbd><kbd>3</kbd> / <kbd>⌘</kbd><kbd>4</kbd> |
+| Columns: open folder / go back | <kbd>→</kbd> / <kbd>←</kbd> |
 | Search this folder | <kbd>⌘</kbd><kbd>F</kbd> |
 | Show / hide preview | <kbd>⌘</kbd><kbd>⇧</kbd><kbd>P</kbd> |
 | Show / hide sidebar | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>S</kbd> |
@@ -102,6 +111,8 @@ Run the Rust tests for the file operations:
 ```bash
 cd src-tauri && cargo test
 ```
+
+The file-type icons are copied from the `material-icon-theme` package by `npm run icons`, which runs automatically before `dev`, `build` and `check`.
 
 ## 📦 Install on your Mac
 
@@ -149,9 +160,12 @@ npm run tauri build -- --bundles app,dmg
 | `src-tauri/src/lib.rs` | Tauri commands and the folder watcher |
 | `src/lib/pane-state.svelte.ts` | One pane's folder, cursor, selection and history |
 | `src-tauri/src/thumbs.rs` | Quick Look thumbnails and app icons, with a disk cache |
-| `src/lib/Pane.svelte` | A pane: list and icon views, both virtualized |
-| `src/lib/Sidebar.svelte` | Drives, favourites and tags |
-| `src/lib/Preview.svelte` | Preview, file info and permissions |
+| `src/lib/Pane.svelte` | A pane: list and icon views (virtualized), or columns and gallery |
+| `src/lib/ColumnView.svelte`, `GalleryView.svelte` | The Columns and Gallery views |
+| `src/lib/material.ts`, `scripts/material-icons.mjs` | Material Icon Theme lookup and its generator |
+| `src/lib/drag.svelte.ts` | Drag and drop within the window |
+| `src/lib/Sidebar.svelte` | Drives, favourites (drag to add or reorder) and tags |
+| `src/lib/Preview.svelte` | Preview and the customisable Info section |
 | `src/routes/+page.svelte` | Layout, toolbar, search, shortcuts and dialogs |
 
 ## 🗺️ Roadmap
@@ -160,18 +174,21 @@ npm run tauri build -- --bundles app,dmg
 - [x] Live refresh, natural sort, hidden files, type-to-jump
 - [x] Signed, unsandboxed macOS build
 - [x] Sidebar with drives, favourites and tags
-- [x] Icon view, preview panel, permissions editor, search
+- [x] Icon view, preview panel, search
+- [x] Columns and Gallery views, Material file-type icons
+- [x] Drag folders into Favourites; collapsible sidebar sections
+- [x] Recents, and a right-click menu to show or hide sidebar sections
 - [ ] Tabs in each pane
 - [ ] Quick Open (fuzzy search across folders)
 - [ ] Batch rename
 - [ ] Folder compare & sync
 - [ ] Full-screen Quick Look (<kbd>Space</kbd>)
-- [ ] Column view
+- [ ] Drag files between panes to copy or move
 - [ ] Drag and drop with Finder
 - [ ] Copy progress for large transfers
 
 ---
 
 <div align="center">
-  <sub>Made with 🦀 Rust.</sub>
+  <sub>Made with 🦀 Rust. File icons from <a href="https://github.com/material-extensions/vscode-material-icon-theme">Material Icon Theme</a> (MIT).</sub>
 </div>

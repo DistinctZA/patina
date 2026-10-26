@@ -233,13 +233,6 @@ fn group_name(gid: u32) -> String {
     unsafe { CStr::from_ptr((*gr).gr_name) }.to_string_lossy().into_owned()
 }
 
-pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
-    let meta = fs::metadata(path)?;
-    // Keep setuid/setgid/sticky bits; only the rwx bits change.
-    let mode = (meta.permissions().mode() & !0o777) | (mode & 0o777);
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
-}
-
 #[derive(Serialize)]
 pub struct TextPreview {
     pub text: String,
@@ -290,9 +283,10 @@ pub struct Sidebar {
     pub volumes: Vec<Volume>,
 }
 
-pub fn sidebar(home: &Path) -> Sidebar {
+/// Well-known folders, with the name and icon the sidebar shows for them.
+fn known_places(home: &Path) -> [(String, PathBuf, &'static str); 9] {
     let user = home.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or("Home".into());
-    let candidates: [(String, PathBuf, &'static str); 9] = [
+    [
         (user, home.to_path_buf(), "home"),
         ("Desktop".into(), home.join("Desktop"), "desktop"),
         ("Documents".into(), home.join("Documents"), "documents"),
@@ -302,12 +296,35 @@ pub fn sidebar(home: &Path) -> Sidebar {
         ("Music".into(), home.join("Music"), "music"),
         ("Pictures".into(), home.join("Pictures"), "pictures"),
         ("iCloud Drive".into(), home.join("Library/Mobile Documents/com~apple~CloudDocs"), "icloud"),
-    ];
-    let favorites = candidates
-        .into_iter()
-        .filter(|(_, p, _)| p.is_dir())
-        .map(|(name, p, icon)| Place { name, path: p.to_string_lossy().into_owned(), icon })
-        .collect();
+    ]
+}
+
+/// The sidebar's contents. `custom` is the user's own Favourites list (in
+/// order), or `None` for the default set.
+pub fn sidebar(home: &Path, custom: Option<&[String]>) -> Sidebar {
+    let known = known_places(home);
+    let favorites = match custom {
+        None => known
+            .into_iter()
+            .filter(|(_, p, _)| p.is_dir())
+            .map(|(name, p, icon)| Place { name, path: p.to_string_lossy().into_owned(), icon })
+            .collect(),
+        // Folders that no longer exist are skipped, not forgotten, so a
+        // drive that's unplugged comes back when it's plugged in again.
+        Some(paths) => paths
+            .iter()
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+            .map(|p| match known.iter().find(|(_, k, _)| *k == p) {
+                Some((name, _, icon)) => Place { name: name.clone(), path: p.to_string_lossy().into_owned(), icon },
+                None => Place {
+                    name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into()),
+                    path: p.to_string_lossy().into_owned(),
+                    icon: "folder",
+                },
+            })
+            .collect(),
+    };
 
     // Each mounted volume appears in /Volumes; the startup disk is a symlink to "/".
     let mut volumes: Vec<Volume> = fs::read_dir("/Volumes")
@@ -634,7 +651,7 @@ mod tests {
         let dir = temp_dir("details");
         let file = dir.join("a.sh");
         fs::write(&file, "echo hi").unwrap();
-        set_mode(&file, 0o750).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o750)).unwrap();
         let d = details(&file).unwrap();
         assert_eq!(d.mode, 0o750);
         assert_eq!(d.size, 7);

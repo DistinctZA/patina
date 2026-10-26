@@ -1,15 +1,13 @@
-//! Thumbnails made by macOS itself: Quick Look (the same previews Finder
-//! shows) for files, and the Finder icon for `.app` bundles, where Quick Look
-//! can hang. Results are cached on disk, keyed by path, size and mtime.
+//! Thumbnails made by macOS itself: Quick Look's thumbnail service (the same
+//! previews Finder shows) for files, and the Finder icon for `.app` bundles.
+//! Results are cached on disk, keyed by path, size and mtime.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -47,14 +45,8 @@ pub fn thumbnail(cache_dir: &Path, path: &Path, size: u32) -> io::Result<Option<
             None => None,
         }
     } else {
-        let mut cmd = Command::new("/usr/bin/qlmanage");
-        cmd.args(["-t", "-s", &size.to_string(), "-o"]).arg(&work).arg(path);
-        run(cmd)?;
-        // qlmanage names its output after the input file, plus ".png".
-        fs::read_dir(&work)?
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .find(|p| p.extension().is_some_and(|e| e == "png"))
+        let out = work.join("thumb.png");
+        quick_look_png(&preview_source(path), size, &out).then_some(out)
     };
 
     let result = match made.filter(|p| p.exists()) {
@@ -94,20 +86,85 @@ fn system_icon_png(_path: &Path, _size: u32) -> Option<Vec<u8>> {
     None
 }
 
-/// Runs a command quietly, killing it if it takes longer than `TIMEOUT`.
-fn run(mut cmd: Command) -> io::Result<()> {
-    let mut child = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
-    let started = Instant::now();
-    while child.try_wait()?.is_none() {
-        if started.elapsed() > TIMEOUT {
-            let _ = child.kill();
-            break;
+/// The file whose picture represents `path`. Wallpapers in
+/// /System/Library/Desktop Pictures are small `.madesktop` descriptors that
+/// Quick Look can't draw; each names a ready-made image to use instead.
+fn preview_source(path: &Path) -> PathBuf {
+    if path.extension().is_some_and(|e| e == "madesktop") {
+        let named = plist::Value::from_file(path).ok().and_then(|v| {
+            v.as_dictionary()?
+                .get("thumbnailPath")?
+                .as_string()
+                .map(PathBuf::from)
+        });
+        if let Some(image) = named.filter(|p| p.is_file()) {
+            return image;
         }
-        thread::sleep(Duration::from_millis(15));
     }
-    // Reap the process so it doesn't linger as a zombie.
-    let _ = child.wait();
-    Ok(())
+    path.to_path_buf()
+}
+
+/// Asks Quick Look's thumbnail service (as Finder does) to write a PNG
+/// thumbnail of `path` to `out`. Unlike the `qlmanage` debugging tool it
+/// replaces, it needs no extra process and fails fast instead of hanging on
+/// files it can't draw. Returns false when there's no thumbnail (the UI then
+/// shows a file-type icon).
+#[cfg(target_os = "macos")]
+fn quick_look_png(path: &Path, size: u32, out: &Path) -> bool {
+    use block2::RcBlock;
+    use objc2::AnyThread as _;
+    use objc2_core_foundation::CGSize;
+    use objc2_foundation::{NSError, NSString, NSURL};
+    use objc2_quick_look_thumbnailing::{
+        QLThumbnailGenerationRequest, QLThumbnailGenerationRequestRepresentationTypes as Kind, QLThumbnailGenerator,
+    };
+    use std::sync::mpsc;
+
+    let (Some(src), Some(dst)) = (path.to_str(), out.to_str()) else {
+        return false;
+    };
+    let src = NSURL::fileURLWithPath(&NSString::from_str(src));
+    let dst = NSURL::fileURLWithPath(&NSString::from_str(dst));
+    let side = f64::from(size);
+    let request = unsafe {
+        QLThumbnailGenerationRequest::initWithFileAtURL_size_scale_representationTypes(
+            QLThumbnailGenerationRequest::alloc(),
+            &src,
+            CGSize::new(side, side),
+            1.0,
+            // A real preview only: files without one fall back to the UI's
+            // file-type icons rather than the system's generic ones.
+            Kind::Thumbnail,
+        )
+    };
+
+    let (tx, rx) = mpsc::channel();
+    let done = RcBlock::new(move |err: *mut NSError| {
+        let _ = tx.send(err.is_null());
+    });
+    let generator = unsafe { QLThumbnailGenerator::sharedGenerator() };
+    // The replacement (`asContentType`) differs only in taking a UTType.
+    #[allow(deprecated)]
+    unsafe {
+        generator.saveBestRepresentationForRequest_toFileAtURL_withContentType_completionHandler(
+            &request,
+            &dst,
+            &NSString::from_str("public.png"),
+            &done,
+        );
+    }
+    match rx.recv_timeout(TIMEOUT) {
+        Ok(saved) => saved && out.exists(),
+        Err(_) => {
+            unsafe { generator.cancelRequest(&request) };
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn quick_look_png(_path: &Path, _size: u32, _out: &Path) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -125,6 +182,22 @@ mod tests {
         assert!(fs::metadata(&png).unwrap().len() > 0);
         // A second call is served from the cache.
         assert_eq!(thumbnail(&cache, app, 64).unwrap(), Some(png));
+        fs::remove_dir_all(&cache).unwrap();
+    }
+
+    #[test]
+    fn wallpapers_and_images_get_thumbnails() {
+        let cache = std::env::temp_dir().join(format!("patina-ql-{}", std::process::id()));
+        let wallpaper = Path::new("/System/Library/Desktop Pictures/Big Sur Aerial.madesktop");
+        if wallpaper.exists() {
+            let png = thumbnail(&cache, wallpaper, 128).unwrap().expect("wallpaper thumbnail");
+            assert!(fs::metadata(&png).unwrap().len() > 2_000);
+        }
+        // A plain text file: Quick Look renders its first page.
+        let text = cache.join("note.txt");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(&text, "Patina thumbnail test\n".repeat(40)).unwrap();
+        assert!(thumbnail(&cache, &text, 128).unwrap().is_some());
         fs::remove_dir_all(&cache).unwrap();
     }
 

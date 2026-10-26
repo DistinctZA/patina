@@ -1,24 +1,77 @@
 <script lang="ts">
   import {
     AppWindow,
+    Check,
+    ChevronDown,
     CircleArrowDown,
     Clapperboard,
+    Clock,
     Cloud,
     FileMusic,
     FileText,
+    Folder,
     HardDrive,
     House,
     Image,
     Monitor,
     Usb,
+    X,
   } from "@lucide/svelte";
-  import { FINDER_TAGS, TAG_COLORS, formatSize, type SidebarData } from "./api";
+  import { FINDER_TAGS, TAG_COLORS, basename, formatSize, type SidebarData } from "./api";
+  import { consumeClick, drag, startDrag } from "./drag.svelte";
 
   let {
     data,
     current,
+    collapsed,
+    hidden,
+    recents,
+    customFavorites,
     onopen,
-  }: { data: SidebarData | null; current: string; onopen: (location: string) => void } = $props();
+    ontoggle,
+    onremove,
+    onshow,
+    onresetfavorites,
+    onclearrecents,
+  }: {
+    data: SidebarData | null;
+    current: string;
+    /** Section names the user has folded away. */
+    collapsed: string[];
+    /** Section names switched off entirely (right-click menu). */
+    hidden: string[];
+    /** Recently visited folders, newest first. */
+    recents: string[];
+    /** Whether Favourites differ from the defaults (enables "Reset"). */
+    customFavorites: boolean;
+    onopen: (location: string) => void;
+    ontoggle: (section: string) => void;
+    onremove: (path: string) => void;
+    onshow: (section: string) => void;
+    onresetfavorites: () => void;
+    onclearrecents: () => void;
+  } = $props();
+
+  /** Sections that can be switched on and off, in sidebar order. */
+  const SECTIONS = [
+    { id: "devices", label: "Devices" },
+    { id: "favorites", label: "Favourites" },
+    { id: "recents", label: "Recents" },
+    { id: "tags", label: "Tags" },
+  ];
+
+  let menu = $state<{ x: number; y: number } | null>(null);
+
+  function openMenu(e: MouseEvent) {
+    e.preventDefault();
+    // Keep the menu on screen near the bottom of the window.
+    menu = { x: e.clientX, y: Math.min(e.clientY, window.innerHeight - 250) };
+  }
+
+  function choose(action: () => void) {
+    action();
+    menu = null;
+  }
 
   const ICONS = {
     home: House,
@@ -30,41 +83,125 @@
     music: FileMusic,
     pictures: Image,
     icloud: Cloud,
+    folder: Folder,
   } as Record<string, typeof House>;
+
+  const open = (location: string) => {
+    if (!consumeClick()) onopen(location);
+  };
+
+  // Where a drop would land in Favourites, for the insertion line.
+  const dropAt = $derived(drag.payload && drag.over === "favorites" ? (drag.overIndex ?? data?.favorites.length ?? 0) : -1);
 </script>
 
-<aside class="sidebar">
+{#snippet heading(name: string, label: string)}
+  <button class="heading" onclick={() => ontoggle(name)} title={collapsed.includes(name) ? `Show ${label}` : `Hide ${label}`}>
+    {label}
+    <span class="chevron" class:closed={collapsed.includes(name)}><ChevronDown size={13} /></span>
+  </button>
+{/snippet}
+
+<svelte:window
+  onmousedown={(e) => menu && !(e.target as Element).closest(".menu") && (menu = null)}
+  onkeydown={(e) => menu && e.key === "Escape" && (menu = null)}
+/>
+
+<aside class="sidebar" oncontextmenu={openMenu}>
   <!-- Room for the window's traffic-light buttons, and a handle to drag the window. -->
   <div class="titlebar" data-tauri-drag-region></div>
 
   <nav>
-    <h3>Devices</h3>
-    {#each data?.volumes ?? [] as vol (vol.path)}
-      <button class="item" class:current={current === vol.path} onclick={() => onopen(vol.path)} title={vol.path}>
-        <span class="ico">{#if vol.isRoot}<HardDrive size={16} />{:else}<Usb size={16} />{/if}</span>
-        <span class="label">{vol.name}</span>
-        {#if vol.available != null}<span class="meta">{formatSize(vol.available)}</span>{/if}
-      </button>
-    {/each}
+    {#if !hidden.includes("devices")}
+      {@render heading("devices", "Devices")}
+      {#if !collapsed.includes("devices")}
+        {#each data?.volumes ?? [] as vol (vol.path)}
+          <button class="item" class:current={current === vol.path} onclick={() => open(vol.path)} title={vol.path}>
+            <span class="ico">{#if vol.isRoot}<HardDrive size={16} />{:else}<Usb size={16} />{/if}</span>
+            <span class="label">{vol.name}</span>
+            {#if vol.available != null}<span class="meta">{formatSize(vol.available)}</span>{/if}
+          </button>
+        {/each}
+      {/if}
+    {/if}
 
-    <h3>Favourites</h3>
-    {#each data?.favorites ?? [] as place (place.path)}
-      {@const Icon = ICONS[place.icon] ?? House}
-      <button class="item" class:current={current === place.path} onclick={() => onopen(place.path)} title={place.path}>
-        <span class="ico" class:green={place.icon === "downloads"}><Icon size={16} /></span>
-        <span class="label">{place.name}</span>
-      </button>
-    {/each}
+    {#if !hidden.includes("favorites")}
+      {@render heading("favorites", "Favourites")}
+      {#if !collapsed.includes("favorites")}
+        <!-- The whole list is a drop zone; each row says "insert before me". -->
+        <div class="favorites" class:dropping={dropAt >= 0} data-drop="favorites">
+          {#each data?.favorites ?? [] as place, i (place.path)}
+            {@const Icon = ICONS[place.icon] ?? Folder}
+            <div class="row" class:insert-before={dropAt === i} data-drop="favorites" data-drop-index={i}>
+              <button
+                class="item"
+                class:current={current === place.path}
+                onclick={() => open(place.path)}
+                onmousedown={(e) => startDrag(e, () => ({ kind: "favorite", index: i }))}
+                title={place.path}
+              >
+                <span class="ico"><Icon size={16} /></span>
+                <span class="label">{place.name}</span>
+              </button>
+              <button class="remove" onclick={() => onremove(place.path)} title="Remove from Favourites">
+                <X size={12} />
+              </button>
+            </div>
+          {/each}
+          <div class="tail" class:insert-before={dropAt === (data?.favorites.length ?? 0)}>
+            {#if drag.payload && drag.payload.kind === "entries"}Drop folders here{/if}
+          </div>
+        </div>
+      {/if}
+    {/if}
 
-    <h3>Tags</h3>
-    {#each FINDER_TAGS as tag (tag.name)}
-      <button class="item" class:current={current === `tag:${tag.name}`} onclick={() => onopen(`tag:${tag.name}`)}>
-        <span class="dot" style:background={TAG_COLORS[tag.color]}></span>
-        <span class="label">{tag.name}</span>
-      </button>
-    {/each}
+    {#if !hidden.includes("recents") && recents.length}
+      {@render heading("recents", "Recents")}
+      {#if !collapsed.includes("recents")}
+        {#each recents as path (path)}
+          <button class="item" class:current={current === path} onclick={() => open(path)} title={path}>
+            <span class="ico"><Clock size={16} /></span>
+            <span class="label">{basename(path)}</span>
+          </button>
+        {/each}
+      {/if}
+    {/if}
+
+    {#if !hidden.includes("tags")}
+      {@render heading("tags", "Tags")}
+      {#if !collapsed.includes("tags")}
+        {#each FINDER_TAGS as tag (tag.name)}
+          <button class="item" class:current={current === `tag:${tag.name}`} onclick={() => open(`tag:${tag.name}`)}>
+            <span class="dot" style:background={TAG_COLORS[tag.color]}></span>
+            <span class="label">{tag.name}</span>
+          </button>
+        {/each}
+      {/if}
+    {/if}
+
+    {#if SECTIONS.every((sec) => hidden.includes(sec.id))}
+      <p class="empty">Right-click to choose what the sidebar shows.</p>
+    {/if}
   </nav>
 </aside>
+
+{#if menu}
+  <div class="menu" role="menu" style:left="{menu.x}px" style:top="{menu.y}px">
+    <p>Show in Sidebar</p>
+    {#each SECTIONS as sec (sec.id)}
+      <button role="menuitemcheckbox" aria-checked={!hidden.includes(sec.id)} onclick={() => choose(() => onshow(sec.id))}>
+        <span class="tick">{#if !hidden.includes(sec.id)}<Check size={13} />{/if}</span>
+        {sec.label}
+      </button>
+    {/each}
+    <hr />
+    <button role="menuitem" disabled={!customFavorites} onclick={() => choose(onresetfavorites)}>
+      <span class="tick"></span>Reset Favourites
+    </button>
+    <button role="menuitem" disabled={!recents.length} onclick={() => choose(onclearrecents)}>
+      <span class="tick"></span>Clear Recents
+    </button>
+  </div>
+{/if}
 
 <style>
   /* An inset card, darker than the window around it. */
@@ -86,15 +223,41 @@
     overflow-y: auto;
     padding: 0 8px 12px;
   }
-  h3 {
-    margin: 14px 8px 4px;
+
+  .heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    margin-top: 10px;
+    padding: 4px 8px;
+    border-radius: 5px;
     font-size: 11px;
     font-weight: 600;
     color: var(--faint);
   }
-  h3:first-child {
-    margin-top: 2px;
+  .heading:first-child {
+    margin-top: 0;
   }
+  .heading:hover {
+    color: var(--muted);
+  }
+  /* Like Finder: the chevron only shows on hover, or when folded. */
+  .chevron {
+    display: grid;
+    opacity: 0;
+    transition:
+      opacity 0.12s,
+      transform 0.15s;
+  }
+  .heading:hover .chevron,
+  .chevron.closed {
+    opacity: 1;
+  }
+  .chevron.closed {
+    transform: rotate(-90deg);
+  }
+
   .item {
     display: flex;
     align-items: center;
@@ -114,10 +277,7 @@
   }
   .ico {
     display: grid;
-    color: var(--accent);
-  }
-  .ico.green {
-    color: #3ecf6e;
+    color: var(--sidebar-icon);
   }
   .label {
     flex: 1;
@@ -136,5 +296,105 @@
     height: 10px;
     margin: 0 2px;
     border-radius: 50%;
+  }
+
+  .favorites {
+    border-radius: 7px;
+  }
+  .favorites.dropping {
+    background: var(--hover);
+  }
+  .row {
+    position: relative;
+  }
+  .row .item {
+    padding-right: 26px;
+  }
+  .remove {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    color: var(--muted);
+    opacity: 0;
+  }
+  .row:hover .remove {
+    opacity: 1;
+  }
+  .remove:hover {
+    background: var(--button-on);
+    color: var(--text);
+  }
+  /* The insertion line while dragging. */
+  .insert-before::before {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    top: -1px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--sidebar-icon);
+  }
+  .empty {
+    margin: 12px 8px;
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  .menu {
+    position: fixed;
+    z-index: 60;
+    min-width: 190px;
+    padding: 5px;
+    border-radius: 9px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  }
+  .menu p {
+    margin: 3px 8px 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--faint);
+  }
+  .menu button {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 4px 8px;
+    border-radius: 5px;
+    font-size: 13px;
+    text-align: left;
+  }
+  .menu button:hover:not(:disabled) {
+    background: var(--blue);
+    color: #fff;
+  }
+  .menu button:disabled {
+    color: var(--faint);
+  }
+  .tick {
+    display: grid;
+    width: 14px;
+  }
+  .menu hr {
+    margin: 5px 4px;
+    border: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .tail {
+    position: relative;
+    min-height: 6px;
+    padding: 0 8px;
+    font-size: 11px;
+    line-height: 22px;
+    color: var(--faint);
   }
 </style>
