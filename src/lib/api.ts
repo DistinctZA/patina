@@ -20,7 +20,12 @@ export type Listing = {
   parent: string | null;
   entries: Entry[];
   available: number | null;
+  /** Which disk the folder is on (to tell a drag will move or copy). */
+  device: number | null;
 };
+
+/** "auto" moves within a disk and copies to another one, like Finder. */
+export type TransferMode = "copy" | "move" | "auto";
 
 export type SortBy = "name" | "size" | "modified" | "kind";
 
@@ -74,6 +79,12 @@ export const api = {
   details: (path: string) => invoke<Details>("details", { path }),
   readText: (path: string) => invoke<TextPreview | null>("read_text", { path }),
   thumbnail: (path: string, size: number) => invoke<string | null>("thumbnail", { path, size }),
+  transfer: (sources: string[], dest: string, mode: TransferMode) =>
+    invoke<void>("transfer", { sources, dest, mode }),
+  duplicate: (paths: string[]) => invoke<void>("duplicate", { paths }),
+  /** The system clipboard, shared with Finder. */
+  clipboardCopy: (paths: string[]) => invoke<void>("clipboard_copy", { paths }),
+  clipboardPaste: () => invoke<string[]>("clipboard_paste"),
   copyInto: (sources: string[], dest: string) => invoke<void>("copy_into", { sources, dest }),
   moveInto: (sources: string[], dest: string) => invoke<void>("move_into", { sources, dest }),
   rename: (path: string, newName: string) => invoke<string>("rename", { path, newName }),
@@ -125,6 +136,11 @@ export const FINDER_TAGS: Tag[] = [
   { name: "Purple", color: 3 },
   { name: "Grey", color: 1 },
 ];
+
+/** The folder a path is in. */
+export function parentOf(path: string): string {
+  return path.slice(0, path.lastIndexOf("/")) || "/";
+}
 
 export function basename(path: string): string {
   return path.split("/").filter(Boolean).pop() ?? "/";

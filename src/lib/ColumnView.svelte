@@ -5,7 +5,17 @@
   import FileIcon from "./FileIcon.svelte";
   import type { PaneState } from "./pane-state.svelte";
 
-  let { pane, home, active }: { pane: PaneState; home: string; active: boolean } = $props();
+  let {
+    pane,
+    home,
+    active,
+    oncontext,
+  }: {
+    pane: PaneState;
+    home: string;
+    active: boolean;
+    oncontext: (e: MouseEvent, index: number | null) => void;
+  } = $props();
 
   type Column = { path: string; entries: Entry[]; open: string };
 
@@ -87,20 +97,31 @@
     startDrag(e, () => ({ kind: "entries", entries: [entry] }));
   }
 
+  /** Right-click in another column: go there with the item selected, then show the menu. */
+  function menuIn(dir: string, entry: Entry, e: MouseEvent) {
+    pane.load(dir, { focus: entry.path }).then(() => {
+      pane.moveCursor(pane.cursor);
+      oncontext(e, pane.cursor);
+    });
+  }
+
   const current = $derived(pane.current);
 </script>
 
 <div class="strip" bind:this={strip}>
   {#each parents as col (col.path)}
     <ColumnList
+      path={col.path}
       entries={col.entries}
       highlight={col.open}
       onrowdown={(i, e) => pickIn(col.path, col.entries[i], e)}
       onrowdbl={(entry) => pane.open(entry)}
+      onrowmenu={(i, e) => menuIn(col.path, col.entries[i], e)}
     />
   {/each}
 
   <ColumnList
+    path={pane.path}
     entries={pane.entries}
     cursor={pane.cursor}
     selected={pane.selected}
@@ -110,14 +131,20 @@
       startDrag(e, () => ({ kind: "entries", entries: pane.targets() }));
     }}
     onrowdbl={(entry) => pane.open(entry)}
+    onrowmenu={(i, e) => {
+      if (!pane.selected.has(pane.entries[i].path)) pane.moveCursor(i);
+      oncontext(e, i);
+    }}
   />
 
   {#if peek}
     {@const dir = peek.path}
     <ColumnList
+      path={dir}
       entries={peek.entries}
       onrowdown={(i, e) => pickIn(dir, peek!.entries[i], e)}
       onrowdbl={(entry) => pane.open(entry)}
+      onrowmenu={(i, e) => menuIn(dir, peek!.entries[i], e)}
     />
   {:else if current && (!current.isDir || isApp(current))}
     <div class="file">

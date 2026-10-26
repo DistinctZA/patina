@@ -90,8 +90,15 @@
     if (!consumeClick()) onopen(location);
   };
 
-  // Where a drop would land in Favourites, for the insertion line.
-  const dropAt = $derived(drag.payload && drag.over === "favorites" ? (drag.overIndex ?? data?.favorites.length ?? 0) : -1);
+  // Reordering Favourites, or adding folders to them, shows an insertion
+  // line. Files dropped onto a favourite go into that folder instead.
+  const inserting = $derived(
+    drag.payload?.kind === "favorite" || (drag.payload?.kind === "entries" && drag.overPath == null),
+  );
+  const dropAt = $derived(
+    inserting && drag.over === "favorites" ? (drag.overIndex ?? data?.favorites.length ?? 0) : -1,
+  );
+  const isDropTarget = (path: string) => !!drag.verdict && drag.overPath === path;
 </script>
 
 {#snippet heading(name: string, label: string)}
@@ -115,7 +122,15 @@
       {@render heading("devices", "Devices")}
       {#if !collapsed.includes("devices")}
         {#each data?.volumes ?? [] as vol (vol.path)}
-          <button class="item" class:current={current === vol.path} onclick={() => open(vol.path)} title={vol.path}>
+          <button
+            class="item"
+            class:current={current === vol.path}
+            class:drop-target={isDropTarget(vol.path)}
+            onclick={() => open(vol.path)}
+            title={vol.path}
+            data-drop="folder"
+            data-drop-path={vol.path}
+          >
             <span class="ico">{#if vol.isRoot}<HardDrive size={16} />{:else}<Usb size={16} />{/if}</span>
             <span class="label">{vol.name}</span>
             {#if vol.available != null}<span class="meta">{formatSize(vol.available)}</span>{/if}
@@ -131,10 +146,17 @@
         <div class="favorites" class:dropping={dropAt >= 0} data-drop="favorites">
           {#each data?.favorites ?? [] as place, i (place.path)}
             {@const Icon = ICONS[place.icon] ?? Folder}
-            <div class="row" class:insert-before={dropAt === i} data-drop="favorites" data-drop-index={i}>
+            <div
+              class="row"
+              class:insert-before={dropAt === i}
+              data-drop="favorites"
+              data-drop-index={i}
+              data-drop-path={drag.payload?.kind === "favorite" ? undefined : place.path}
+            >
               <button
                 class="item"
                 class:current={current === place.path}
+                class:drop-target={isDropTarget(place.path)}
                 onclick={() => open(place.path)}
                 onmousedown={(e) => startDrag(e, () => ({ kind: "favorite", index: i }))}
                 title={place.path}
@@ -148,7 +170,7 @@
             </div>
           {/each}
           <div class="tail" class:insert-before={dropAt === (data?.favorites.length ?? 0)}>
-            {#if drag.payload && drag.payload.kind === "entries"}Drop folders here{/if}
+            {#if drag.payload?.kind === "entries"}Drop folders here to add them{/if}
           </div>
         </div>
       {/if}
@@ -158,7 +180,15 @@
       {@render heading("recents", "Recents")}
       {#if !collapsed.includes("recents")}
         {#each recents as path (path)}
-          <button class="item" class:current={current === path} onclick={() => open(path)} title={path}>
+          <button
+            class="item"
+            class:current={current === path}
+            class:drop-target={isDropTarget(path)}
+            onclick={() => open(path)}
+            title={path}
+            data-drop="folder"
+            data-drop-path={path}
+          >
             <span class="ico"><Clock size={16} /></span>
             <span class="label">{basename(path)}</span>
           </button>
@@ -274,6 +304,10 @@
   }
   .item.current {
     background: var(--selection);
+  }
+  .item.drop-target {
+    background: rgba(47, 111, 228, 0.3);
+    box-shadow: inset 0 0 0 1.5px var(--blue);
   }
   .ico {
     display: grid;

@@ -4,7 +4,11 @@
   import FileIcon from "./FileIcon.svelte";
   import type { PaneState } from "./pane-state.svelte";
 
-  let { pane, active }: { pane: PaneState; active: boolean } = $props();
+  let {
+    pane,
+    active,
+    oncontext,
+  }: { pane: PaneState; active: boolean; oncontext: (e: MouseEvent, index: number | null) => void } = $props();
 
   // The filmstrip only draws the thumbnails in view.
   const CELL = 86;
@@ -78,6 +82,12 @@
             startDrag(e, () => ({ kind: "entries", entries: pane.targets() }));
           }}
           ondblclick={() => pane.open(entry)}
+          oncontextmenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!pane.selected.has(entry.path)) pane.moveCursor(index);
+            oncontext(e, index);
+          }}
           title={entry.name}
           role="option"
           aria-selected={index === pane.cursor}

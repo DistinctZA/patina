@@ -1,7 +1,8 @@
 mod fs_ops;
+mod pasteboard;
 mod thumbs;
 
-use fs_ops::{Details, Listing, Sidebar, SortBy, TextPreview};
+use fs_ops::{Details, Listing, Sidebar, SortBy, TextPreview, Transfer};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -122,6 +123,34 @@ async fn thumbnail(
         .map(|p| p.map(|p| p.to_string_lossy().into_owned()))
 }
 
+/// Copies or moves files into `dest`. `mode` is "copy", "move", or "auto"
+/// (move within a disk, copy to another one, like dragging in Finder).
+#[tauri::command]
+async fn transfer(sources: Vec<String>, dest: String, mode: String) -> Result<(), String> {
+    blocking(move || fs_ops::transfer(&to_paths(sources), Path::new(&dest), Transfer::parse(&mode))).await
+}
+
+#[tauri::command]
+async fn duplicate(paths: Vec<String>) -> Result<(), String> {
+    blocking(move || fs_ops::duplicate(&to_paths(paths))).await
+}
+
+// Clipboard commands are synchronous, so Tauri runs them on the main thread,
+// where AppKit expects the pasteboard to be used.
+#[tauri::command]
+fn clipboard_copy(paths: Vec<String>) -> Result<(), String> {
+    if pasteboard::copy_files(&paths) {
+        Ok(())
+    } else {
+        Err("Couldn't put the files on the clipboard".into())
+    }
+}
+
+#[tauri::command]
+fn clipboard_paste() -> Vec<String> {
+    pasteboard::pasted_files()
+}
+
 #[tauri::command]
 async fn copy_into(sources: Vec<String>, dest: String) -> Result<(), String> {
     blocking(move || fs_ops::copy_into(&to_paths(sources), Path::new(&dest))).await
@@ -211,6 +240,10 @@ pub fn run() {
             details,
             read_text,
             thumbnail,
+            transfer,
+            duplicate,
+            clipboard_copy,
+            clipboard_paste,
             copy_into,
             move_into,
             rename,

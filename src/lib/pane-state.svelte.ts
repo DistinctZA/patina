@@ -12,6 +12,7 @@ export class PaneState {
   path = $state("");
   parent = $state<string | null>(null);
   available = $state<number | null>(null);
+  device = $state<number | null>(null);
   /** Everything in the folder; `entries` is this after the search filter. */
   all = $state.raw<Entry[]>([]);
   filter = $state("");
@@ -92,6 +93,7 @@ export class PaneState {
       this.path = listing.path;
       this.parent = listing.parent;
       this.available = listing.available;
+      this.device = listing.device;
       this.all = listing.entries;
 
       const found = cursorPath ? this.entries.findIndex((e) => e.path === cursorPath) : -1;

@@ -41,6 +41,9 @@ pub struct Listing {
     pub entries: Vec<Entry>,
     /// Free space on the volume, in bytes.
     pub available: Option<u64>,
+    /// Which disk the folder is on, so the UI can tell a drag will copy
+    /// (another disk) rather than move.
+    pub device: Option<u64>,
 }
 
 fn millis(t: io::Result<SystemTime>) -> Option<u64> {
@@ -156,6 +159,7 @@ pub fn list_dir(path: &Path, show_hidden: bool, sort_by: SortBy, desc: bool) -> 
     Ok(Listing {
         parent: path.parent().map(|p| p.to_string_lossy().into_owned()),
         available: available_space(&path),
+        device: fs::metadata(&path).ok().map(|m| m.dev()),
         path: path.to_string_lossy().into_owned(),
         entries,
     })
@@ -179,7 +183,7 @@ pub fn find_tagged(tag: &str, show_hidden: bool, sort_by: SortBy, desc: bool) ->
         .filter(|e| show_hidden || !e.is_hidden)
         .collect();
     sort_entries(&mut entries, sort_by, desc);
-    Ok(Listing { path: format!("tag:{tag}"), parent: None, entries, available: None })
+    Ok(Listing { path: format!("tag:{tag}"), parent: None, entries, available: None, device: None })
 }
 
 #[derive(Serialize)]
@@ -487,6 +491,51 @@ pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Transfer {
+    Copy,
+    Move,
+    /// Like Finder: move within a disk, copy to another one.
+    Auto,
+}
+
+impl Transfer {
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "copy" => Self::Copy,
+            "move" => Self::Move,
+            _ => Self::Auto,
+        }
+    }
+}
+
+pub fn transfer(sources: &[PathBuf], dest_dir: &Path, mode: Transfer) -> io::Result<()> {
+    match mode {
+        Transfer::Copy => copy_into(sources, dest_dir),
+        Transfer::Move => move_into(sources, dest_dir),
+        Transfer::Auto => {
+            let dest_dev = fs::metadata(dest_dir)?.dev();
+            let (same_disk, other_disk): (Vec<PathBuf>, Vec<PathBuf>) = sources
+                .iter()
+                .cloned()
+                .partition(|s| fs::symlink_metadata(s).is_ok_and(|m| m.dev() == dest_dev));
+            move_into(&same_disk, dest_dir)?;
+            copy_into(&other_disk, dest_dir)
+        }
+    }
+}
+
+/// Copies each item next to itself ("name copy", like Finder's Duplicate).
+pub fn duplicate(sources: &[PathBuf]) -> io::Result<()> {
+    for src in sources {
+        let parent = src
+            .parent()
+            .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Can't duplicate the root folder"))?;
+        copy_into(std::slice::from_ref(src), parent)?;
+    }
+    Ok(())
+}
+
 pub fn move_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<()> {
     for src in sources {
         if src.parent() == Some(dest_dir) {
@@ -719,6 +768,48 @@ mod tests {
         assert_eq!(names(SortBy::Size, false), ["C.md", "b.txt", "a.zip"]);
         assert_eq!(names(SortBy::Size, true), ["a.zip", "b.txt", "C.md"]);
         assert_eq!(names(SortBy::Kind, false), ["C.md", "b.txt", "a.zip"]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn transfer_auto_moves_within_a_disk() {
+        let root = temp_dir("transfer");
+        let (a, b) = (root.join("a"), root.join("b"));
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        fs::write(a.join("one.txt"), "1").unwrap();
+        fs::write(a.join("two.txt"), "2").unwrap();
+
+        // Same disk: Auto moves.
+        transfer(&[a.join("one.txt")], &b, Transfer::Auto).unwrap();
+        assert!(!a.join("one.txt").exists() && b.join("one.txt").exists());
+        // Copy keeps the original; Move removes it.
+        transfer(&[a.join("two.txt")], &b, Transfer::Copy).unwrap();
+        assert!(a.join("two.txt").exists() && b.join("two.txt").exists());
+        transfer(&[a.join("two.txt")], &b, Transfer::Move).unwrap();
+        assert!(!a.join("two.txt").exists() && b.join("two copy.txt").exists());
+
+        assert_eq!(Transfer::parse("copy"), Transfer::Copy);
+        assert_eq!(Transfer::parse("anything"), Transfer::Auto);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn duplicate_makes_a_copy_alongside() {
+        let dir = temp_dir("duplicate");
+        fs::write(dir.join("report.pdf"), "x").unwrap();
+        fs::create_dir(dir.join("folder")).unwrap();
+        duplicate(&[dir.join("report.pdf"), dir.join("folder")]).unwrap();
+        assert!(dir.join("report copy.pdf").exists());
+        assert!(dir.join("folder copy").is_dir());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn listing_reports_its_disk() {
+        let dir = temp_dir("device");
+        let listing = list_dir(&dir, false, SortBy::Name, false).unwrap();
+        assert_eq!(listing.device, Some(fs::metadata(&dir).unwrap().dev()));
         fs::remove_dir_all(&dir).unwrap();
     }
 

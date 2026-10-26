@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import {
     ChevronLeft,
     ChevronRight,
@@ -21,8 +22,18 @@
     Trash,
     X,
   } from "@lucide/svelte";
-  import { api, isApp, type Settings, type SidebarData } from "$lib/api";
-  import { drag, setDropHandler } from "$lib/drag.svelte";
+  import { api, basename, isApp, parentOf, type Entry, type Settings, type SidebarData, type TransferMode } from "$lib/api";
+  import ContextMenu, { type MenuItem } from "$lib/ContextMenu.svelte";
+  import {
+    drag,
+    dropHere,
+    endDrag,
+    hover,
+    setDropHandler,
+    type DragPayload,
+    type DropTarget,
+    type Verdict,
+  } from "$lib/drag.svelte";
   import { PaneState, type View } from "$lib/pane-state.svelte";
   import Pane from "$lib/Pane.svelte";
   import Preview from "$lib/Preview.svelte";
@@ -46,17 +57,27 @@
   let showPreview = $state(true);
   let searchInput = $state<HTMLInputElement>();
 
-  type Prompt = { title: string; action: string; value: string; submit: (value: string) => Promise<void> };
+  type Prompt = {
+    title: string;
+    action: string;
+    value: string;
+    submit: (value: string) => Promise<void>;
+    /** Select all of the text, rather than a file name without its extension. */
+    selectAll?: boolean;
+  };
   let prompt = $state<Prompt | null>(null);
   let toast = $state<string | null>(null);
   let busy = $state(false);
   let toastTimer: ReturnType<typeof setTimeout>;
 
-  function showError(err: unknown) {
-    toast = String(err);
+  function showToast(message: string, ms: number) {
+    toast = message;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (toast = null), 5000);
+    toastTimer = setTimeout(() => (toast = null), ms);
   }
+
+  const showError = (err: unknown) => showToast(String(err), 5000);
+  const showNote = (message: string) => showToast(message, 2500);
 
   async function run(task: () => Promise<unknown>) {
     busy = true;
@@ -86,6 +107,43 @@
   function trash() {
     const paths = active.targets().map((e) => e.path);
     if (paths.length) run(() => api.moveToTrash(paths).then(refreshBoth));
+  }
+
+  /** Copies or moves files into a folder, then refreshes what's on screen. */
+  function moveOrCopy(paths: string[], dest: string, mode: TransferMode) {
+    if (paths.length) run(() => api.transfer(paths, dest, mode).then(refreshBoth));
+  }
+
+  const itemsLabel = (entries: Entry[]) => (entries.length === 1 ? `“${entries[0].name}”` : `${entries.length} items`);
+
+  /** Puts files on the system clipboard, so they paste in Finder too. */
+  function copyToClipboard(entries = active.targets()) {
+    if (!entries.length) return;
+    run(() => api.clipboardCopy(entries.map((e) => e.path)).then(() => showNote(`Copied ${itemsLabel(entries)}`)));
+  }
+
+  /** Pastes files copied here or in Finder into the active pane; ⌥ moves them. */
+  function paste(move = false) {
+    const pane = active;
+    if (!pane.isFolder) return showError("Open a folder to paste into.");
+    run(async () => {
+      const paths = await api.clipboardPaste();
+      if (!paths.length) return showNote("Nothing to paste");
+      await api.transfer(paths, pane.path, move ? "move" : "copy");
+      await refreshBoth();
+    });
+  }
+
+  function duplicate() {
+    const paths = active.targets().map((e) => e.path);
+    if (paths.length) run(() => api.duplicate(paths).then(refreshBoth));
+  }
+
+  function copyPaths(entries: Entry[]) {
+    navigator.clipboard
+      .writeText(entries.map((e) => e.path).join("\n"))
+      .then(() => showNote(entries.length === 1 ? "Copied path" : `Copied ${entries.length} paths`))
+      .catch(showError);
   }
 
   function newFolder() {
@@ -139,9 +197,24 @@
   function selectName(input: HTMLInputElement) {
     tick().then(() => {
       input.focus();
-      const dot = input.value.lastIndexOf(".");
+      const dot = prompt?.selectAll ? -1 : input.value.lastIndexOf(".");
       input.setSelectionRange(0, dot > 0 ? dot : input.value.length);
     });
+  }
+
+  /** Jumps the active pane to a typed or pasted path (⇧⌘G, like Finder). */
+  function goToFolder() {
+    const pane = active;
+    prompt = {
+      title: "Go to folder",
+      action: "Go",
+      value: pane.isFolder ? pane.path : home,
+      selectAll: true,
+      submit: async (value) => {
+        const path = value.trim().replace(/^~(?=\/|$)/, home);
+        await pane.load(path.length > 1 ? path.replace(/\/+$/, "") : path);
+      },
+    };
   }
 
   function searchKey(e: KeyboardEvent) {
@@ -166,6 +239,7 @@
       if (e.key === "Escape") prompt = null;
       return;
     }
+    if (menu) return;
     // Let text fields have their keys; checkboxes (permissions) shouldn't
     // swallow the shortcuts after being clicked.
     if (e.target instanceof HTMLInputElement && e.target.type !== "checkbox") return;
@@ -241,6 +315,9 @@
         case e.key.toLowerCase() === "n" && cmd && e.shiftKey:
           newFolder();
           return true;
+        case e.code === "KeyG" && cmd && e.shiftKey:
+          goToFolder();
+          return true;
         case e.key === "F8":
         case e.key === "Backspace" && cmd:
           trash();
@@ -270,6 +347,18 @@
           return true;
         case e.key === "a" && cmd:
           pane.selectAll();
+          return true;
+        // ⌘C/⌘V use the physical key: ⌥ changes e.key ("√" for ⌥V).
+        case e.code === "KeyC" && cmd && !e.shiftKey && !e.altKey:
+          // Copying text selected in the preview keeps working.
+          if (window.getSelection()?.toString()) return false;
+          copyToClipboard();
+          return true;
+        case e.code === "KeyV" && cmd && !e.shiftKey:
+          paste(e.altKey);
+          return true;
+        case e.code === "KeyD" && cmd:
+          duplicate();
           return true;
         case e.key === "Escape":
           if (pane.filter) pane.setFilter("");
@@ -384,13 +473,121 @@
     });
   }
 
-  setDropHandler((payload, zone, index) => {
-    if (zone !== "favorites") return;
-    if (payload.kind === "favorite") return moveFavorite(payload.index, index);
-    const folders = payload.entries.filter((e) => e.isDir && !isApp(e)).map((e) => e.path);
-    if (folders.length) addFavorites(folders, index);
-    else showError("Only folders can be added to Favourites.");
+  // ── Drag and drop ──────────────────────────────────────────────────────
+
+  /** The disk a path is on, when one of the panes is showing that disk. */
+  function deviceOf(path: string): number | null {
+    for (const p of [left, right]) {
+      if (p.isFolder && p.device != null && (path === p.path || path.startsWith(p.path + "/"))) return p.device;
+    }
+    return null;
+  }
+
+  // Fallback when no pane shows the folder: other disks are under /Volumes.
+  const volumeOf = (path: string) => (path.startsWith("/Volumes/") ? path.split("/").slice(0, 3).join("/") : "/");
+
+  const payloadPaths = (p: DragPayload) =>
+    p.kind === "entries" ? p.entries.map((e) => e.path) : p.kind === "files" ? p.paths : [];
+
+  /** What dropping here would do, or null if it isn't allowed. */
+  function judge(p: DragPayload | null, target: DropTarget | null, alt: boolean, meta: boolean): Verdict {
+    if (!p || !target || p.kind === "favorite") return null;
+    // The gap under Favourites adds folders as new favourites.
+    if (target.zone === "favorites" && target.path == null) {
+      return p.kind === "entries" && p.entries.some((e) => e.isDir && !isApp(e)) ? { verb: "Add", dest: null } : null;
+    }
+    const dest = target.path;
+    const sources = payloadPaths(p);
+    if (!dest || dest.startsWith("tag:") || !sources.length) return null;
+    // Never into itself or a folder inside it.
+    if (sources.some((src) => dest === src || dest.startsWith(src + "/"))) return null;
+    // Already there; ⌥ duplicates instead, as in Finder.
+    if (!alt && sources.every((src) => parentOf(src) === dest)) return null;
+    if (alt) return { verb: "Copy", dest };
+    if (meta) return { verb: "Move", dest };
+    // Like Finder: move within a disk, copy to another one.
+    const from = deviceOf(parentOf(sources[0]));
+    const to = deviceOf(dest);
+    const sameDisk = from != null && to != null ? from === to : volumeOf(sources[0]) === volumeOf(dest);
+    return { verb: sameDisk ? "Move" : "Copy", dest };
+  }
+
+  $effect(() => {
+    const target = drag.over ? { zone: drag.over, path: drag.overPath, index: drag.overIndex } : null;
+    drag.verdict = judge(drag.payload, target, drag.alt, drag.meta);
   });
+
+  setDropHandler((payload, target, { alt, meta }) => {
+    if (payload.kind === "favorite") {
+      if (target.zone === "favorites") moveFavorite(payload.index, target.index);
+      return;
+    }
+    const verdict = judge(payload, target, alt, meta);
+    if (!verdict) {
+      if (target.zone === "favorites" && target.path == null) showError("Only folders can be added to Favourites.");
+      return;
+    }
+    if (verdict.verb === "Add") {
+      if (payload.kind === "entries") {
+        addFavorites(payload.entries.filter((e) => e.isDir && !isApp(e)).map((e) => e.path), target.index);
+      }
+      return;
+    }
+    moveOrCopy(payloadPaths(payload), verdict.dest!, alt ? "copy" : meta ? "move" : "auto");
+  });
+
+  // ── Right-click menus ─────────────────────────────────────────────────
+
+  let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+  function openMenu(pane: PaneState, e: MouseEvent, index: number | null) {
+    activeId = pane.id as "left" | "right";
+    menu = { x: e.clientX, y: e.clientY, items: index == null ? spaceMenu(pane) : itemMenu(pane) };
+  }
+
+  /** For the selected files and folders. */
+  function itemMenu(pane: PaneState): MenuItem[] {
+    const targets = pane.targets();
+    const one = targets.length === 1 ? targets[0] : null;
+    const folders = targets.filter((t) => t.isDir && !isApp(t));
+    const openAll = () => (one ? run(async () => pane.open(one)) : targets.forEach((t) => !t.isDir && api.openPath(t.path)));
+    return [
+      { label: "Open", shortcut: "⌘↓", action: openAll },
+      { label: "Show in Finder", shortcut: "⌥⌘R", action: () => run(() => api.revealInFinder(targets[0].path)) },
+      "separator",
+      { label: one ? "Copy" : `Copy ${targets.length} Items`, shortcut: "⌘C", action: () => copyToClipboard(targets) },
+      { label: "Paste", shortcut: "⌘V", disabled: !pane.isFolder, action: () => paste() },
+      { label: "Duplicate", shortcut: "⌘D", action: duplicate },
+      "separator",
+      { label: "Copy to Other Pane", shortcut: "F5", disabled: !other.isFolder, action: () => transfer("copy") },
+      { label: "Move to Other Pane", shortcut: "F6", disabled: !other.isFolder, action: () => transfer("move") },
+      "separator",
+      { label: "Rename…", shortcut: "F2", disabled: !one, action: rename },
+      { label: "Add to Favourites", disabled: !folders.length, action: () => addFavorites(folders.map((f) => f.path), null) },
+      { label: one ? "Copy Path" : "Copy Paths", action: () => copyPaths(targets) },
+      "separator",
+      { label: "Move to Bin", shortcut: "⌘⌫", danger: true, action: trash },
+    ];
+  }
+
+  /** For empty space in a pane. */
+  function spaceMenu(pane: PaneState): MenuItem[] {
+    return [
+      { label: "New Folder", shortcut: "⇧⌘N", disabled: !pane.isFolder, action: newFolder },
+      { label: "Paste", shortcut: "⌘V", disabled: !pane.isFolder, action: () => paste() },
+      "separator",
+      { heading: "View" },
+      ...VIEWS.map((v) => ({
+        label: v.label,
+        shortcut: v.key,
+        checked: pane.view === v.view,
+        action: () => (pane.view = v.view),
+      })),
+      "separator",
+      { label: "Show Hidden Files", shortcut: "⇧⌘.", checked: pane.showHidden, action: () => run(() => pane.toggleHidden()) },
+      { label: "Refresh", shortcut: "⌘R", action: () => run(refreshBoth) },
+    ];
+  }
 
   const VIEWS: { view: View; label: string; key: string }[] = [
     { view: "grid", label: "Icons", key: "⌘1" },
@@ -414,6 +611,19 @@
         if (pane.loading || pane.path !== payload.path) return;
         pane.refresh().catch(showError);
       }, 150);
+    });
+    // Files dragged in from Finder or another app (positions in device pixels).
+    const unlistenDrop = getCurrentWebview().onDragDropEvent(({ payload: e }) => {
+      if (e.type === "leave") return endDrag();
+      const x = e.position.x / devicePixelRatio;
+      const y = e.position.y / devicePixelRatio;
+      if (e.type === "enter") drag.payload = { kind: "files", paths: e.paths };
+      hover(x, y);
+      if (e.type === "drop") {
+        if (!drag.payload) drag.payload = { kind: "files", paths: e.paths };
+        dropHere();
+        endDrag();
+      }
     });
     const unlistenVolumes = listen("volumes-changed", () => {
       clearTimeout(timers.volumes);
@@ -439,6 +649,7 @@
     return () => {
       unlistenDir.then((fn) => fn());
       unlistenVolumes.then((fn) => fn());
+      unlistenDrop.then((fn) => fn());
     };
   });
 
@@ -545,8 +756,20 @@
 
     <div class="body" class:with-preview={showPreview}>
       <div class="panes">
-        <Pane pane={left} {home} active={activeId === "left"} onactivate={() => (activeId = "left")} />
-        <Pane pane={right} {home} active={activeId === "right"} onactivate={() => (activeId = "right")} />
+        <Pane
+          pane={left}
+          {home}
+          active={activeId === "left"}
+          onactivate={() => (activeId = "left")}
+          oncontext={(e, i) => openMenu(left, e, i)}
+        />
+        <Pane
+          pane={right}
+          {home}
+          active={activeId === "right"}
+          onactivate={() => (activeId = "right")}
+          oncontext={(e, i) => openMenu(right, e, i)}
+        />
       </div>
       {#if showPreview}
         <Preview
@@ -564,15 +787,29 @@
     {@const label =
       p.kind === "favorite"
         ? (sidebarData?.favorites[p.index]?.name ?? "")
-        : p.entries.length === 1
-          ? p.entries[0].name
-          : `${p.entries.length} items`}
-    {@const refused =
-      drag.over === "favorites" && p.kind === "entries" && !p.entries.some((e) => e.isDir && !isApp(e))}
-    <div class="ghost" class:refused style:left="{drag.x + 14}px" style:top="{drag.y + 10}px">
+        : p.kind === "files"
+          ? p.paths.length === 1
+            ? basename(p.paths[0])
+            : `${p.paths.length} items`
+          : p.entries.length === 1
+            ? p.entries[0].name
+            : `${p.entries.length} items`}
+    <div
+      class="ghost"
+      class:refused={p.kind !== "favorite" && !!drag.over && !drag.verdict}
+      style:left="{drag.x + 14}px"
+      style:top="{drag.y + 10}px"
+    >
       {#if p.kind === "entries"}<FileIcon entry={p.entries[0]} size={16} />{/if}
       <span>{label}</span>
+      {#if drag.verdict}
+        <em class="verb">{drag.verdict.verb === "Add" ? "+ Favourites" : drag.verdict.verb}</em>
+      {/if}
     </div>
+  {/if}
+
+  {#if menu}
+    <ContextMenu x={menu.x} y={menu.y} items={menu.items} onclose={() => (menu = null)} />
   {/if}
 
   {#if toast}
@@ -813,6 +1050,16 @@
   }
   .ghost.refused {
     opacity: 0.55;
+  }
+  .ghost .verb {
+    flex: none;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--blue);
+    color: #fff;
+    font-style: normal;
+    font-size: 11px;
+    font-weight: 600;
   }
   :global(body.dragging),
   :global(body.dragging *) {

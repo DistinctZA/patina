@@ -56,7 +56,9 @@ npm install && npm run tauri dev
 |---|---|
 | 🪟 **Dual panes** | Two folders side by side. <kbd>Tab</kbd> flips between them. |
 | ⚡ **Instant, even when huge** | Only visible rows are drawn, so 50,000-file folders scroll smoothly. |
-| 📋 **Safe copy & move** | Clashes become `name copy`, `name copy 2`, like Finder. Nothing is ever overwritten. |
+| 🖱️ **Drag and drop** | Drag between panes, onto any folder or sidebar item, or in from Finder. Moves on the same disk and copies to another, like Finder; hold ⌥ to copy or ⌘ to move. |
+| 📋 **Copy & paste with Finder** | ⌘C / ⌘V share the system clipboard with Finder, ⌥⌘V moves, ⌘D duplicates. Clashes become `name copy`, never overwritten. |
+| 🖱️ **Right-click menus** | Open, Copy, Paste, Duplicate, Rename, Add to Favourites, Copy Path, Move to Bin, and view options. |
 | 🍏 **APFS clones** | Copies on the same disk are instant and take no extra space. |
 | 🔄 **Live refresh** | Panes update by themselves when files change on disk (FSEvents). |
 | 🔤 **Natural sorting** | `file 2` before `file 10`; sort by name, size or date, folders first. |
@@ -87,6 +89,11 @@ npm install && npm run tauri dev
 | Reveal in Finder | <kbd>⌘</kbd><kbd>⌥</kbd><kbd>R</kbd> |
 | Refresh | <kbd>⌘</kbd><kbd>R</kbd> |
 | Select all / clear | <kbd>⌘</kbd><kbd>A</kbd> / <kbd>Esc</kbd> |
+| Copy / paste files (shared with Finder) | <kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌘</kbd><kbd>V</kbd> |
+| Move copied files here | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>V</kbd> |
+| Duplicate | <kbd>⌘</kbd><kbd>D</kbd> |
+| Go to folder | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd> |
+| While dragging: copy / move | hold <kbd>⌥</kbd> / <kbd>⌘</kbd> |
 | Icons / List / Columns / Gallery | <kbd>⌘</kbd><kbd>1</kbd> / <kbd>⌘</kbd><kbd>2</kbd> / <kbd>⌘</kbd><kbd>3</kbd> / <kbd>⌘</kbd><kbd>4</kbd> |
 | Columns: open folder / go back | <kbd>→</kbd> / <kbd>←</kbd> |
 | Search this folder | <kbd>⌘</kbd><kbd>F</kbd> |
@@ -180,6 +187,8 @@ The script bumps the version everywhere it appears, runs the checks and tests, b
 | `src/lib/ColumnView.svelte`, `GalleryView.svelte` | The Columns and Gallery views |
 | `src/lib/material.ts`, `scripts/material-icons.mjs` | Material Icon Theme lookup and its generator |
 | `src/lib/drag.svelte.ts` | Drag and drop within the window |
+| `src/lib/ContextMenu.svelte` | Right-click menus |
+| `src-tauri/src/pasteboard.rs` | Files on the system clipboard, shared with Finder |
 | `src/lib/Sidebar.svelte` | Drives, favourites (drag to add or reorder) and tags |
 | `src/lib/Preview.svelte` | Preview and the customisable Info section |
 | `src/routes/+page.svelte` | Layout, toolbar, search, shortcuts and dialogs |
@@ -200,8 +209,9 @@ The script bumps the version everywhere it appears, runs the checks and tests, b
 - [ ] Batch rename
 - [ ] Folder compare & sync
 - [ ] Full-screen Quick Look (<kbd>Space</kbd>)
-- [ ] Drag files between panes to copy or move
-- [ ] Drag and drop with Finder
+- [x] Drag and drop between panes, onto folders and the sidebar, and in from Finder
+- [x] Copy and paste files with Finder, duplicate, right-click menus, Go to Folder
+- [ ] Drag files out to Finder and other apps
 - [ ] Copy progress for large transfers
 
 ---

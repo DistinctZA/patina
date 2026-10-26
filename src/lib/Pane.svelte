@@ -1,8 +1,8 @@
 <script lang="ts">
   import { ChevronRight, Folder, HardDrive, House, Tag } from "@lucide/svelte";
-  import { TAG_COLORS, formatDate, formatSize, type SortBy } from "./api";
+  import { TAG_COLORS, formatDate, formatSize, isApp, type Entry, type SortBy } from "./api";
   import ColumnView from "./ColumnView.svelte";
-  import { startDrag } from "./drag.svelte";
+  import { drag, startDrag } from "./drag.svelte";
   import FileIcon from "./FileIcon.svelte";
   import GalleryView from "./GalleryView.svelte";
   import type { PaneState } from "./pane-state.svelte";
@@ -12,7 +12,19 @@
     active,
     home,
     onactivate,
-  }: { pane: PaneState; active: boolean; home: string; onactivate: () => void } = $props();
+    oncontext,
+  }: {
+    pane: PaneState;
+    active: boolean;
+    home: string;
+    onactivate: () => void;
+    /** Right-click on an entry (its index) or on empty space (null). */
+    oncontext: (e: MouseEvent, index: number | null) => void;
+  } = $props();
+
+  /** Folders take drops; apps and files don't. */
+  const dropPath = (entry: Entry) => (entry.isDir && !isApp(entry) ? entry.path : undefined);
+  const isDropTarget = (path: string) => !!drag.verdict && drag.overPath === path;
 
   // Only rows on screen are drawn, so huge folders stay smooth.
   const ROW = 26;
@@ -22,6 +34,13 @@
   const OVERSCAN = 6;
 
   let viewport = $state<HTMLDivElement>();
+  let crumbsEl = $state<HTMLElement>();
+
+  // Long paths scroll the breadcrumbs so the current folder stays visible.
+  $effect(() => {
+    void crumbs;
+    if (crumbsEl) crumbsEl.scrollLeft = crumbsEl.scrollWidth;
+  });
   let scrollTop = $state(0);
   let height = $state(0);
   let width = $state(0);
@@ -79,6 +98,15 @@
     scrollTop = viewport.scrollTop;
   });
 
+  /** Right-click selects the item first (unless it's already selected). */
+  function rowMenu(e: MouseEvent, index: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    onactivate();
+    if (!pane.selected.has(pane.entries[index].path)) pane.moveCursor(index);
+    oncontext(e, index);
+  }
+
   /** Select on press; dragging afterwards carries the selection. */
   function pickRow(index: number, e: MouseEvent) {
     pane.click(index, e);
@@ -92,11 +120,24 @@
   ];
 </script>
 
-<section class="pane" class:active onmousedown={onactivate} role="presentation">
+<section
+  class="pane"
+  class:active
+  class:drop-into={drag.over === "pane" && isDropTarget(pane.path)}
+  onmousedown={onactivate}
+  oncontextmenu={(e) => {
+    e.preventDefault();
+    onactivate();
+    oncontext(e, null);
+  }}
+  data-drop={pane.isFolder ? "pane" : undefined}
+  data-drop-path={pane.isFolder ? pane.path : undefined}
+  role="presentation"
+>
   <header class="location">
     <span class="loc-icon"><HeaderIcon size={22} strokeWidth={1.5} /></span>
     <div class="loc-text">
-      <nav class="crumbs">
+      <nav class="crumbs" bind:this={crumbsEl}>
         {#each crumbs as crumb, i (crumb.path)}
           {#if i > 0}<ChevronRight size={12} class="sep" />{/if}
           <button class="crumb" onclick={() => pane.load(crumb.path)} title={crumb.path}>{crumb.label}</button>
@@ -118,9 +159,9 @@
   {/if}
 
   {#if pane.view === "columns"}
-    <ColumnView {pane} {home} {active} />
+    <ColumnView {pane} {home} {active} {oncontext} />
   {:else if pane.view === "gallery"}
-    <GalleryView {pane} {active} />
+    <GalleryView {pane} {active} {oncontext} />
   {:else}
     <div
       class="list"
@@ -135,12 +176,16 @@
           {#if grid}
             <div
               class="cell"
+              class:drop-target={isDropTarget(entry.path)}
               class:cursor={index === pane.cursor}
               class:selected={pane.selected.has(entry.path)}
               class:hidden-file={entry.isHidden}
               style:transform="translate({gridPad + (index % perRow) * CELL_W}px, {Math.floor(index / perRow) * CELL_H + 8}px)"
               onmousedown={(e) => pickRow(index, e)}
               ondblclick={() => pane.open(entry)}
+              oncontextmenu={(e) => rowMenu(e, index)}
+              data-drop={dropPath(entry) && "folder"}
+              data-drop-path={dropPath(entry)}
               role="gridcell"
               tabindex="-1"
             >
@@ -157,6 +202,7 @@
           {:else}
             <div
               class="row row-grid"
+              class:drop-target={isDropTarget(entry.path)}
               class:stripe={index % 2 === 1}
               class:cursor={index === pane.cursor}
               class:selected={pane.selected.has(entry.path)}
@@ -164,6 +210,9 @@
               style:transform="translateY({index * ROW}px)"
               onmousedown={(e) => pickRow(index, e)}
               ondblclick={() => pane.open(entry)}
+              oncontextmenu={(e) => rowMenu(e, index)}
+              data-drop={dropPath(entry) && "folder"}
+              data-drop-path={dropPath(entry)}
               role="row"
               tabindex="-1"
             >
@@ -216,6 +265,15 @@
     height: 2px;
     border-radius: 0 0 2px 2px;
     background: transparent;
+  }
+  /* Dropping onto the pane's own folder, or onto a folder in it. */
+  .pane.drop-into {
+    box-shadow: inset 0 0 0 2px var(--blue);
+  }
+  .row.drop-target,
+  .cell.drop-target .thumb {
+    background: rgba(47, 111, 228, 0.28) !important;
+    box-shadow: inset 0 0 0 1.5px var(--blue);
   }
   .pane.active::before {
     background: var(--active-bar);

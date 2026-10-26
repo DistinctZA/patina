@@ -1,9 +1,11 @@
 <script lang="ts">
   import { ChevronRight } from "@lucide/svelte";
   import { isApp, type Entry } from "./api";
+  import { drag } from "./drag.svelte";
   import FileIcon from "./FileIcon.svelte";
 
   let {
+    path,
     entries,
     cursor = -1,
     selected = new Set<string>(),
@@ -11,7 +13,10 @@
     focused = false,
     onrowdown,
     onrowdbl,
+    onrowmenu,
   }: {
+    /** The folder this column lists; dropping on empty space goes here. */
+    path: string;
     entries: Entry[];
     /** Row with the keyboard cursor (the pane's own column only). */
     cursor?: number;
@@ -22,7 +27,10 @@
     focused?: boolean;
     onrowdown: (index: number, e: MouseEvent) => void;
     onrowdbl: (entry: Entry) => void;
+    onrowmenu: (index: number, e: MouseEvent) => void;
   } = $props();
+
+  const isDropTarget = (p: string) => !!drag.verdict && drag.overPath === p;
 
   const ROW = 24;
   const OVERSCAN = 8;
@@ -49,6 +57,9 @@
 
 <div
   class="column"
+  class:drop-into={isDropTarget(path)}
+  data-drop={path.startsWith("tag:") ? undefined : "folder"}
+  data-drop-path={path.startsWith("tag:") ? undefined : path}
   bind:this={viewport}
   bind:clientHeight={height}
   onscroll={() => (scrollTop = viewport!.scrollTop)}
@@ -62,9 +73,17 @@
         class:selected={selected.has(entry.path) || entry.path === highlight}
         class:focused
         class:hidden-file={entry.isHidden}
+        class:drop-target={isDropTarget(entry.path)}
         style:transform="translateY({index * ROW + 4}px)"
         onmousedown={(e) => onrowdown(index, e)}
         ondblclick={() => onrowdbl(entry)}
+        oncontextmenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onrowmenu(index, e);
+        }}
+        data-drop={entry.isDir && !isApp(entry) ? "folder" : undefined}
+        data-drop-path={entry.isDir && !isApp(entry) ? entry.path : undefined}
         role="row"
         tabindex="-1"
       >
@@ -106,6 +125,13 @@
   }
   .row.selected.focused {
     background: var(--selection);
+  }
+  .column.drop-into {
+    box-shadow: inset 0 0 0 2px var(--blue);
+  }
+  .row.drop-target {
+    background: rgba(47, 111, 228, 0.28) !important;
+    box-shadow: inset 0 0 0 1.5px var(--blue);
   }
   .row.cursor {
     box-shadow: inset 0 0 0 1px var(--cursor);
