@@ -1,6 +1,6 @@
 [package]
 name = "patina"
-version = "0.5.1"
+version = "0.5.2"
 description = "A free, open-source dual-pane file manager for macOS"
 authors = ["Rick Wagner"]
 license = "MIT"
