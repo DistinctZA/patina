@@ -24,6 +24,16 @@ Try `npm run release -- minor --dry-run` first to see the next version and notes
 Release notes are built from commit messages, so write commits for a reader:
 a short subject, then a body listing what changed.
 
+Each release also publishes a signed update (`Patina_X.Y.Z_aarch64.app.tar.gz`)
+and `latest.json`, which the in-app updater reads. They're signed with
+`~/.tauri/patina_updater.key` (plus `.key.password`), kept outside the repo;
+copy both to any other Mac you release from, or the script stops. Losing the
+key means installed copies can't update themselves any more.
+
+Notarization is optional: if a keychain login named `patina-notary` exists
+(see `scripts/notarize.mjs`), releases are notarized so downloads open
+without Gatekeeper's warning.
+
 ## Checks
 
 ```bash
