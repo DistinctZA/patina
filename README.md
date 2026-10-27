@@ -56,7 +56,8 @@ npm install && npm run tauri dev
 |---|---|
 | 🪟 **Dual panes** | Two folders side by side. <kbd>Tab</kbd> flips between them. |
 | ⚡ **Instant, even when huge** | Only visible rows are drawn, so 50,000-file folders scroll smoothly. |
-| 🖱️ **Drag and drop** | Drag between panes, onto any folder or sidebar item, or in from Finder. Moves on the same disk and copies to another, like Finder; hold ⌥ to copy or ⌘ to move. |
+| 🖱️ **Drag and drop** | Drag between panes, onto any folder, breadcrumb or sidebar item, in from Finder, or out to Finder and other apps. Moves on the same disk and copies to another, like Finder; hold ⌥ to copy or ⌘ to move. Hold over a folder to spring it open; lists scroll at their edges. |
+| ⬚ **Drag to select** | Drag a box across empty space to select; ⌘ or ⇧ adds to the selection. |
 | 📋 **Copy & paste with Finder** | ⌘C / ⌘V share the system clipboard with Finder, ⌥⌘V moves, ⌘D duplicates. Clashes become `name copy`, never overwritten. |
 | 🖱️ **Right-click menus** | Open, Copy, Paste, Duplicate, Rename, Add to Favourites, Copy Path, Move to Bin, and view options. |
 | 🍏 **APFS clones** | Copies on the same disk are instant and take no extra space. |
@@ -211,7 +212,7 @@ The script bumps the version everywhere it appears, runs the checks and tests, b
 - [ ] Full-screen Quick Look (<kbd>Space</kbd>)
 - [x] Drag and drop between panes, onto folders and the sidebar, and in from Finder
 - [x] Copy and paste files with Finder, duplicate, right-click menus, Go to Folder
-- [ ] Drag files out to Finder and other apps
+- [x] Drag out to Finder and other apps, spring-loaded folders, drag to select
 - [ ] Copy progress for large transfers
 
 ---

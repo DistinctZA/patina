@@ -2,8 +2,11 @@
 // which the webview shares with the OS file-drop handling.
 //
 // Drop zones are plain elements marked `data-drop="<zone>"`, optionally with
-// `data-drop-path="<folder>"` (where files would go) and
-// `data-drop-index="<n>"` (where in a list the drop lands).
+// `data-drop-path="<folder>"` (where files would go),
+// `data-drop-index="<n>"` (where in a list the drop lands) and `data-spring`
+// (holding a drag over it opens the folder). Scrolling areas marked
+// `data-autoscroll="x"` or `"y"` scroll when the pointer nears their edge, and
+// `data-pane="<id>"` says which pane an element belongs to.
 import type { Entry } from "./api";
 
 export type DragPayload =
@@ -27,6 +30,9 @@ class DragState {
   over = $state<string | null>(null);
   overPath = $state<string | null>(null);
   overIndex = $state<number | null>(null);
+  /** The pane under the pointer, and whether the zone opens if you hover. */
+  overPane = $state<string | null>(null);
+  overSpring = $state(false);
   /** ⌥ forces a copy, ⌘ a move. */
   alt = $state(false);
   meta = $state(false);
@@ -37,10 +43,16 @@ class DragState {
 export const drag = new DragState();
 
 let onDrop: DropHandler | null = null;
+let onLeaveWindow: ((payload: DragPayload, mods: { alt: boolean; meta: boolean }) => void) | null = null;
 let suppressClick = false;
 
 export function setDropHandler(handler: DropHandler) {
   onDrop = handler;
+}
+
+/** Called when a drag of files leaves the window, to hand it to macOS. */
+export function setLeaveWindowHandler(handler: typeof onLeaveWindow) {
+  onLeaveWindow = handler;
 }
 
 /** True once, right after a drag ends, so the click that follows is ignored. */
@@ -54,10 +66,38 @@ export function consumeClick(): boolean {
 export function hover(x: number, y: number) {
   drag.x = x;
   drag.y = y;
-  const zone = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop]");
+  const under = document.elementFromPoint(x, y);
+  const zone = under?.closest<HTMLElement>("[data-drop]");
   drag.over = zone?.dataset.drop ?? null;
   drag.overPath = zone?.dataset.dropPath ?? null;
   drag.overIndex = zone?.dataset.dropIndex != null ? Number(zone.dataset.dropIndex) : null;
+  drag.overSpring = !!zone?.hasAttribute("data-spring");
+  drag.overPane = under?.closest<HTMLElement>("[data-pane]")?.dataset.pane ?? null;
+}
+
+const EDGE = 36;
+
+/** Scrolls whatever the pointer is near the edge of; true if anything moved. */
+function autoScroll(x: number, y: number): boolean {
+  let moved = false;
+  for (let el = document.elementFromPoint(x, y); el; el = el.parentElement) {
+    const axis = (el as HTMLElement).dataset?.autoscroll;
+    if (!axis) continue;
+    const r = el.getBoundingClientRect();
+    // Faster the closer the pointer gets to the edge.
+    const speed = (d: number) => Math.ceil(((EDGE - d) / EDGE) * 18);
+    if (axis === "y") {
+      if (y - r.top < EDGE) el.scrollTop -= speed(y - r.top);
+      else if (r.bottom - y < EDGE) el.scrollTop += speed(r.bottom - y);
+      else continue;
+    } else {
+      if (x - r.left < EDGE) el.scrollLeft -= speed(x - r.left);
+      else if (r.right - x < EDGE) el.scrollLeft += speed(r.right - x);
+      else continue;
+    }
+    moved = true;
+  }
+  return moved;
 }
 
 export function currentTarget(): DropTarget | null {
@@ -70,6 +110,8 @@ export function endDrag() {
   drag.over = null;
   drag.overPath = null;
   drag.overIndex = null;
+  drag.overPane = null;
+  drag.overSpring = false;
   drag.alt = false;
   drag.meta = false;
 }
@@ -90,6 +132,15 @@ export function startDrag(e: MouseEvent, make: () => DragPayload | null) {
   const startX = e.clientX;
   const startY = e.clientY;
   let started = false;
+  let lastX = startX;
+  let lastY = startY;
+  let frame = 0;
+
+  // While the pointer rests near a list's edge, keep scrolling it.
+  const tick = () => {
+    if (autoScroll(lastX, lastY)) hover(lastX, lastY);
+    frame = requestAnimationFrame(tick);
+  };
 
   const modifiers = (ev: MouseEvent | KeyboardEvent) => {
     drag.alt = ev.altKey;
@@ -104,8 +155,19 @@ export function startDrag(e: MouseEvent, make: () => DragPayload | null) {
       drag.payload = payload;
       started = true;
       document.body.classList.add("dragging");
+      frame = requestAnimationFrame(tick);
     }
     modifiers(ev);
+    lastX = ev.clientX;
+    lastY = ev.clientY;
+    // Leaving the window turns it into a system drag (to Finder, Mail…).
+    const outside = ev.clientX < 0 || ev.clientY < 0 || ev.clientX >= innerWidth || ev.clientY >= innerHeight;
+    if (outside && drag.payload?.kind === "entries" && onLeaveWindow) {
+      onLeaveWindow(drag.payload, { alt: drag.alt, meta: drag.meta });
+      suppressClick = true;
+      setTimeout(() => (suppressClick = false), 0);
+      return stop();
+    }
     hover(ev.clientX, ev.clientY);
   };
 
@@ -126,6 +188,7 @@ export function startDrag(e: MouseEvent, make: () => DragPayload | null) {
   };
 
   const stop = () => {
+    cancelAnimationFrame(frame);
     window.removeEventListener("mousemove", move);
     window.removeEventListener("mouseup", up);
     window.removeEventListener("keydown", key, true);

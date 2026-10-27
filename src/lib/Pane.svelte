@@ -98,6 +98,70 @@
     scrollTop = viewport.scrollTop;
   });
 
+  // Drag a box across empty space to select; ⌘ or ⇧ adds to the selection.
+  // A plain click on empty space clears it, as in Finder.
+  let marquee = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+
+  function startMarquee(e: MouseEvent) {
+    if (e.button !== 0 || !viewport || (e.target as Element).closest(".row, .cell")) return;
+    const list = viewport;
+    const box = list.getBoundingClientRect();
+    // Content coordinates, so the box stays put while the list scrolls.
+    const at = (ev: MouseEvent) => [ev.clientX - box.left + list.scrollLeft, ev.clientY - box.top + list.scrollTop];
+    const [x0, y0] = at(e);
+    const keep = e.metaKey || e.shiftKey ? new Set(pane.selected) : new Set<string>();
+    if (!keep.size) pane.clearSelection();
+    let lastEvent = e;
+
+    const update = (ev: MouseEvent) => {
+      lastEvent = ev;
+      const [x1, y1] = at(ev);
+      marquee = { x0, y0, x1, y1 };
+      const picked = new Set(keep);
+      for (const i of hits(Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1))) {
+        picked.add(pane.entries[i].path);
+      }
+      pane.selectPaths(picked);
+    };
+    // Dragging the box past the top or bottom scrolls the list.
+    const scroller = setInterval(() => {
+      const y = lastEvent.clientY;
+      const step = y < box.top + 20 ? -14 : y > box.bottom - 20 ? 14 : 0;
+      if (marquee && step) {
+        list.scrollTop += step;
+        update(lastEvent);
+      }
+    }, 30);
+    const up = () => {
+      clearInterval(scroller);
+      marquee = null;
+      window.removeEventListener("mousemove", update);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", update);
+    window.addEventListener("mouseup", up);
+  }
+
+  /** Indexes of the entries a box (content coordinates) touches. */
+  function hits(left: number, top: number, right: number, bottom: number): number[] {
+    const out: number[] = [];
+    const count = pane.entries.length;
+    if (!grid) {
+      for (let i = Math.max(0, Math.floor(top / ROW)); i <= Math.min(count - 1, Math.floor(bottom / ROW)); i++) out.push(i);
+      return out;
+    }
+    const rowFrom = Math.max(0, Math.floor((top - 8) / CELL_H));
+    const rowTo = Math.floor((bottom - 8) / CELL_H);
+    for (let r = rowFrom; r <= rowTo; r++) {
+      for (let c = 0; c < perRow; c++) {
+        const x = gridPad + c * CELL_W;
+        const i = r * perRow + c;
+        if (i < count && right >= x && left <= x + CELL_W) out.push(i);
+      }
+    }
+    return out;
+  }
+
   /** Right-click selects the item first (unless it's already selected). */
   function rowMenu(e: MouseEvent, index: number) {
     e.preventDefault();
@@ -132,6 +196,7 @@
   }}
   data-drop={pane.isFolder ? "pane" : undefined}
   data-drop-path={pane.isFolder ? pane.path : undefined}
+  data-pane={pane.id}
   role="presentation"
 >
   <header class="location">
@@ -140,7 +205,17 @@
       <nav class="crumbs" bind:this={crumbsEl}>
         {#each crumbs as crumb, i (crumb.path)}
           {#if i > 0}<ChevronRight size={12} class="sep" />{/if}
-          <button class="crumb" onclick={() => pane.load(crumb.path)} title={crumb.path}>{crumb.label}</button>
+          <button
+            class="crumb"
+            class:drop-target={isDropTarget(crumb.path)}
+            onclick={() => pane.load(crumb.path)}
+            title={crumb.path}
+            data-drop={pane.tag ? undefined : "folder"}
+            data-drop-path={pane.tag ? undefined : crumb.path}
+            data-spring={pane.tag ? undefined : ""}
+          >
+            {crumb.label}
+          </button>
         {/each}
       </nav>
       <div class="summary">{summary}</div>
@@ -169,8 +244,20 @@
       bind:clientHeight={height}
       bind:clientWidth={width}
       onscroll={() => (scrollTop = viewport!.scrollTop)}
+      onmousedown={startMarquee}
+      data-autoscroll="y"
+      role="presentation"
     >
       <div class="spacer" style:height="{rows * rowH + (grid ? 12 : 0)}px">
+        {#if marquee}
+          <div
+            class="marquee"
+            style:left="{Math.min(marquee.x0, marquee.x1)}px"
+            style:top="{Math.min(marquee.y0, marquee.y1)}px"
+            style:width="{Math.abs(marquee.x1 - marquee.x0)}px"
+            style:height="{Math.abs(marquee.y1 - marquee.y0)}px"
+          ></div>
+        {/if}
         {#each visible as entry, i (entry.path)}
           {@const index = first + i}
           {#if grid}
@@ -186,6 +273,7 @@
               oncontextmenu={(e) => rowMenu(e, index)}
               data-drop={dropPath(entry) && "folder"}
               data-drop-path={dropPath(entry)}
+              data-spring={dropPath(entry) && ""}
               role="gridcell"
               tabindex="-1"
             >
@@ -213,6 +301,7 @@
               oncontextmenu={(e) => rowMenu(e, index)}
               data-drop={dropPath(entry) && "folder"}
               data-drop-path={dropPath(entry)}
+              data-spring={dropPath(entry) && ""}
               role="row"
               tabindex="-1"
             >
@@ -247,16 +336,6 @@
     background: var(--pane);
     container-type: inline-size;
   }
-  /* In a narrow pane, drop the date so names keep their room. */
-  @container (max-width: 440px) {
-    .row-grid {
-      grid-template-columns: minmax(0, 1fr) 72px;
-    }
-    .date,
-    .col:nth-child(3) {
-      display: none;
-    }
-  }
   /* A thin bar along the top marks the pane that keys act on. */
   .pane::before {
     content: "";
@@ -266,6 +345,19 @@
     border-radius: 0 0 2px 2px;
     background: transparent;
   }
+  .marquee {
+    position: absolute;
+    z-index: 1;
+    border: 1px solid var(--blue);
+    border-radius: 3px;
+    background: rgba(47, 111, 228, 0.15);
+    pointer-events: none;
+  }
+  .crumb.drop-target {
+    background: var(--blue);
+    color: #fff;
+  }
+
   /* Dropping onto the pane's own folder, or onto a folder in it. */
   .pane.drop-into {
     box-shadow: inset 0 0 0 2px var(--blue);
@@ -472,5 +564,17 @@
     inset: 40% 0 auto;
     text-align: center;
     color: var(--faint);
+  }
+
+  /* In a narrow pane, drop the date so names keep their room. Last in the
+     stylesheet so it overrides the normal column layout above. */
+  @container (max-width: 440px) {
+    .row-grid {
+      grid-template-columns: minmax(0, 1fr) 72px;
+    }
+    .date,
+    .col:nth-child(3) {
+      display: none;
+    }
   }
 </style>

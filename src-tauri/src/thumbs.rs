@@ -67,7 +67,7 @@ pub fn thumbnail(cache_dir: &Path, path: &Path, size: u32) -> io::Result<Option<
 /// reading the bundle's .icns) also covers apps whose real icon lives only in
 /// an asset catalog, such as Books.
 #[cfg(target_os = "macos")]
-fn system_icon_png(path: &Path, size: u32) -> Option<Vec<u8>> {
+pub fn system_icon_png(path: &Path, size: u32) -> Option<Vec<u8>> {
     use objc2::AnyThread as _;
     use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSWorkspace};
     use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
@@ -82,7 +82,7 @@ fn system_icon_png(path: &Path, size: u32) -> Option<Vec<u8>> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn system_icon_png(_path: &Path, _size: u32) -> Option<Vec<u8>> {
+pub fn system_icon_png(_path: &Path, _size: u32) -> Option<Vec<u8>> {
     None
 }
 

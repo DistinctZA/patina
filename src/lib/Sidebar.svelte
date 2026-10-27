@@ -117,7 +117,7 @@
   <!-- Room for the window's traffic-light buttons, and a handle to drag the window. -->
   <div class="titlebar" data-tauri-drag-region></div>
 
-  <nav>
+  <nav data-autoscroll="y">
     {#if !hidden.includes("devices")}
       {@render heading("devices", "Devices")}
       {#if !collapsed.includes("devices")}
@@ -130,6 +130,7 @@
             title={vol.path}
             data-drop="folder"
             data-drop-path={vol.path}
+            data-spring
           >
             <span class="ico">{#if vol.isRoot}<HardDrive size={16} />{:else}<Usb size={16} />{/if}</span>
             <span class="label">{vol.name}</span>
@@ -152,6 +153,7 @@
               data-drop="favorites"
               data-drop-index={i}
               data-drop-path={drag.payload?.kind === "favorite" ? undefined : place.path}
+              data-spring={drag.payload?.kind === "favorite" ? undefined : ""}
             >
               <button
                 class="item"
@@ -188,6 +190,7 @@
             title={path}
             data-drop="folder"
             data-drop-path={path}
+            data-spring
           >
             <span class="ico"><Clock size={16} /></span>
             <span class="label">{basename(path)}</span>

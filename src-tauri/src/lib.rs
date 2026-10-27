@@ -151,6 +151,40 @@ fn clipboard_paste() -> Vec<String> {
     pasteboard::pasted_files()
 }
 
+/// Hands a drag that left the window over to macOS, so the files can be
+/// dropped into Finder, Mail, the desktop or any other app. Runs on the main
+/// thread (sync command), as AppKit requires. Emits `drag-out-done` when the
+/// drag ends, so panes can refresh if the files were moved.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn drag_out(app: AppHandle, window: tauri::Window, paths: Vec<String>, move_files: bool) -> Result<(), String> {
+    let icon = paths
+        .first()
+        .and_then(|p| thumbs::system_icon_png(Path::new(p), 64))
+        .ok_or("Couldn't make a drag image")?;
+    let item = drag::DragItem::Files(to_paths(paths));
+    let options = drag::Options {
+        mode: if move_files { drag::DragMode::Move } else { drag::DragMode::Copy },
+        ..Default::default()
+    };
+    drag::start_drag(
+        &window,
+        item,
+        drag::Image::Raw(icon),
+        move |result, _| {
+            let _ = app.emit("drag-out-done", matches!(result, drag::DragResult::Dropped));
+        },
+        options,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn drag_out(_paths: Vec<String>, _move_files: bool) -> Result<(), String> {
+    Err("Dragging out isn't supported on this system".into())
+}
+
 #[tauri::command]
 async fn copy_into(sources: Vec<String>, dest: String) -> Result<(), String> {
     blocking(move || fs_ops::copy_into(&to_paths(sources), Path::new(&dest))).await
@@ -244,6 +278,7 @@ pub fn run() {
             duplicate,
             clipboard_copy,
             clipboard_paste,
+            drag_out,
             copy_into,
             move_into,
             rename,

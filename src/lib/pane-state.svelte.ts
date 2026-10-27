@@ -200,6 +200,13 @@ export class PaneState {
     }
   }
 
+  /** Selects exactly these paths (from a drag-to-select box). */
+  selectPaths(paths: Set<string>) {
+    this.selected = paths;
+    const first = this.entries.findIndex((e) => paths.has(e.path));
+    if (first >= 0) this.cursor = this.anchor = first;
+  }
+
   selectAll() {
     this.selected = new Set(this.entries.map((e) => e.path));
   }

@@ -30,6 +30,7 @@
     endDrag,
     hover,
     setDropHandler,
+    setLeaveWindowHandler,
     type DragPayload,
     type DropTarget,
     type Verdict,
@@ -536,6 +537,25 @@
     moveOrCopy(payloadPaths(payload), verdict.dest!, alt ? "copy" : meta ? "move" : "auto");
   });
 
+  // Dragging past the window's edge hands the files to macOS, so they can be
+  // dropped into Finder, Mail or any app. Copies unless ⌘ is held.
+  setLeaveWindowHandler((payload, { meta }) => {
+    if (payload.kind === "entries") api.dragOut(payload.entries.map((e) => e.path), meta).catch(showError);
+  });
+
+  // Spring-loaded folders: hold a drag over a folder and it opens, so you can
+  // drop deeper. Sidebar folders open in the active pane.
+  $effect(() => {
+    const { overPath: path, overSpring, overPane } = drag;
+    const kind = drag.payload?.kind;
+    if (!path || !overSpring || (kind !== "entries" && kind !== "files")) return;
+    const pane = overPane === "left" || overPane === "right" ? panes[overPane] : active;
+    const timer = setTimeout(() => {
+      if (pane.path !== path) pane.load(path).catch(showError);
+    }, 900);
+    return () => clearTimeout(timer);
+  });
+
   // ── Right-click menus ─────────────────────────────────────────────────
 
   let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
@@ -612,11 +632,14 @@
         pane.refresh().catch(showError);
       }, 150);
     });
-    // Files dragged in from Finder or another app (positions in device pixels).
+    // Files dragged in from Finder or another app. On macOS wry reports the
+    // position in points (the page's own units) even though it's typed as a
+    // PhysicalPosition; elsewhere it's in device pixels.
+    const dropScale = navigator.userAgent.includes("Mac") ? 1 : devicePixelRatio;
     const unlistenDrop = getCurrentWebview().onDragDropEvent(({ payload: e }) => {
       if (e.type === "leave") return endDrag();
-      const x = e.position.x / devicePixelRatio;
-      const y = e.position.y / devicePixelRatio;
+      const x = e.position.x / dropScale;
+      const y = e.position.y / dropScale;
       if (e.type === "enter") drag.payload = { kind: "files", paths: e.paths };
       hover(x, y);
       if (e.type === "drop") {
@@ -624,6 +647,10 @@
         dropHere();
         endDrag();
       }
+    });
+    // After a drag out (files may have moved), refresh.
+    const unlistenDragOut = listen<boolean>("drag-out-done", ({ payload: dropped }) => {
+      if (dropped) refreshBoth().catch(showError);
     });
     const unlistenVolumes = listen("volumes-changed", () => {
       clearTimeout(timers.volumes);
@@ -650,6 +677,7 @@
       unlistenDir.then((fn) => fn());
       unlistenVolumes.then((fn) => fn());
       unlistenDrop.then((fn) => fn());
+      unlistenDragOut.then((fn) => fn());
     };
   });
 

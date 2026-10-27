@@ -38,6 +38,7 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
 objc2-quick-look-thumbnailing = { version = "0.3.2", default-features = false, features = ["std", "block2", "QLThumbnailGenerator", "QLThumbnailGenerationRequest", "objc2-core-foundation"] }
 block2 = "0.6.2"
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
+drag = "2.1.1"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

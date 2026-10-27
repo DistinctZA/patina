@@ -60,6 +60,7 @@
   class:drop-into={isDropTarget(path)}
   data-drop={path.startsWith("tag:") ? undefined : "folder"}
   data-drop-path={path.startsWith("tag:") ? undefined : path}
+  data-autoscroll="y"
   bind:this={viewport}
   bind:clientHeight={height}
   onscroll={() => (scrollTop = viewport!.scrollTop)}
@@ -84,6 +85,7 @@
         }}
         data-drop={entry.isDir && !isApp(entry) ? "folder" : undefined}
         data-drop-path={entry.isDir && !isApp(entry) ? entry.path : undefined}
+        data-spring={entry.isDir && !isApp(entry) ? "" : undefined}
         role="row"
         tabindex="-1"
       >

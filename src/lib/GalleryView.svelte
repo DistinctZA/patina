@@ -64,6 +64,7 @@
 
   <div
     class="filmstrip"
+    data-autoscroll="x"
     bind:this={strip}
     bind:clientWidth={width}
     onscroll={() => (scrollLeft = strip!.scrollLeft)}

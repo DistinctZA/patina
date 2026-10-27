@@ -85,6 +85,8 @@ export const api = {
   /** The system clipboard, shared with Finder. */
   clipboardCopy: (paths: string[]) => invoke<void>("clipboard_copy", { paths }),
   clipboardPaste: () => invoke<string[]>("clipboard_paste"),
+  /** Hands a drag over to macOS, for dropping into Finder or other apps. */
+  dragOut: (paths: string[], moveFiles: boolean) => invoke<void>("drag_out", { paths, moveFiles }),
   copyInto: (sources: string[], dest: string) => invoke<void>("copy_into", { sources, dest }),
   moveInto: (sources: string[], dest: string) => invoke<void>("move_into", { sources, dest }),
   rename: (path: string, newName: string) => invoke<string>("rename", { path, newName }),

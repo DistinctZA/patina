@@ -108,7 +108,7 @@
   const current = $derived(pane.current);
 </script>
 
-<div class="strip" bind:this={strip}>
+<div class="strip" bind:this={strip} data-autoscroll="x">
   {#each parents as col (col.path)}
     <ColumnList
       path={col.path}
