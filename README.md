@@ -8,7 +8,7 @@
 A fast, keyboard-friendly Finder alternative, built with Rust.
 
 <p>
-  <a href="https://github.com/DistinctZA/patina/releases/latest"><img alt="Latest version" src="https://img.shields.io/badge/version-0.5.2-36373c?style=flat-square" /></a>
+  <a href="https://github.com/DistinctZA/patina/releases/latest"><img alt="Latest version" src="https://img.shields.io/badge/version-0.6.0-36373c?style=flat-square" /></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square" /></a>
   <img alt="macOS 13 or later" src="https://img.shields.io/badge/macOS-13+-000000?style=flat-square&logo=apple&logoColor=white" />
   <img alt="Built with Rust" src="https://img.shields.io/badge/built_with-Rust-b7410e?style=flat-square&logo=rust&logoColor=white" />
