@@ -65,6 +65,8 @@ export type Settings = {
   hiddenSections?: string[];
   /** Recently visited folders, newest first. */
   recents?: string[];
+  /** Look for new versions at launch and twice a day; on unless false. */
+  autoUpdate?: boolean;
 };
 
 export const api = {

@@ -30,6 +30,8 @@ xattr = "1.6.1"
 plist = "1.10.3"
 libc = "0.2.191"
 tokio = { version = "1.54.1", features = ["sync"] }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 # AppKit, for the same file and app icons Finder shows.
 [target.'cfg(target_os = "macos")'.dependencies]

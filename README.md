@@ -36,6 +36,8 @@ Patina shows two folders side by side, so moving and copying files takes one ste
 
 Patina runs on Macs with Apple silicon (M1 or later) and macOS 13 Ventura or later. On an Intel Mac, [build it from source](#build-from-source).
 
+After that, Patina keeps itself up to date: when a new version is out, click **Update** at the bottom of the sidebar.
+
 > [!TIP]
 > macOS asks for permission the first time you open Desktop, Documents, Downloads or an external drive. To skip those prompts, add Patina under **System Settings → Privacy & Security → Full Disk Access**.
 
@@ -52,6 +54,7 @@ Patina runs on Macs with Apple silicon (M1 or later) and macOS 13 Ventura or lat
 - **Sidebar.** Drives, Favourites, Recent folders and Finder tags. Drag folders in to add them.
 - **Icons for 1,300+ file types**, so you can tell files apart at a glance.
 - **Safe by default.** Deleted files go to the Bin, and nothing is ever overwritten: a clash becomes "name copy".
+- **Updates itself.** Patina checks for new versions and installs them in one click. The version number is at the bottom of the sidebar.
 - **Private.** Everything stays on your Mac. No account, no ads, no tracking.
 
 <div align="center">
@@ -102,7 +105,10 @@ Yes. Patina is a two-pane file manager in the same tradition, made for macOS.
 Patina is signed by its developer but isn't notarized by Apple yet, so macOS asks you to confirm once. See step 3 under [Download](#download).
 
 **Does Patina collect any data?**<br />
-No. It works entirely on your Mac and never connects to the internet.
+No. Your files never leave your Mac. The only time Patina goes online is to check GitHub for a new version, which you can turn off: click the version number at the bottom of the sidebar and untick **Check automatically**.
+
+**How do updates work?**<br />
+Patina checks for a new version when it starts and twice a day. Click **Update and Restart** and it downloads, installs and reopens itself. Every update is signed, and Patina refuses any download that isn't.
 
 **Is there a Windows or Linux version?**<br />
 Not yet. Patina is Mac-only for now.

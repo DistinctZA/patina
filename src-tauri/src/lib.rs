@@ -330,6 +330,10 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Updates: download, check the signature against the key in
+        // tauri.conf.json, install, then restart.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(Watchers::default())
         .manage(Jobs::default())
         .manage(ThumbSlots(Semaphore::new(4)))

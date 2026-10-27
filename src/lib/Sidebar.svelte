@@ -17,6 +17,7 @@
     Usb,
     X,
   } from "@lucide/svelte";
+  import AppVersion from "./AppVersion.svelte";
   import { FINDER_TAGS, TAG_COLORS, basename, formatSize, type SidebarData } from "./api";
   import { consumeClick, drag, startDrag } from "./drag.svelte";
 
@@ -33,6 +34,8 @@
     onshow,
     onresetfavorites,
     onclearrecents,
+    autoCheck,
+    onautocheck,
   }: {
     data: SidebarData | null;
     current: string;
@@ -50,6 +53,9 @@
     onshow: (section: string) => void;
     onresetfavorites: () => void;
     onclearrecents: () => void;
+    /** Whether Patina looks for new versions by itself. */
+    autoCheck: boolean;
+    onautocheck: (on: boolean) => void;
   } = $props();
 
   /** Sections that can be switched on and off, in sidebar order. */
@@ -216,6 +222,8 @@
       <p class="empty">Right-click to choose what the sidebar shows.</p>
     {/if}
   </nav>
+
+  <AppVersion {autoCheck} {onautocheck} />
 </aside>
 
 {#if menu}
