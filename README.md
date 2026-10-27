@@ -9,7 +9,7 @@
 **Two panes. Zero lag. No sandbox. Built in Rust.**
 
 <p>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.4.0-36373c?style=flat-square" />
+  <img alt="Version" src="https://img.shields.io/badge/version-0.5.0-36373c?style=flat-square" />
   <img alt="Rust" src="https://img.shields.io/badge/Rust-1.85+-b7410e?style=flat-square&logo=rust&logoColor=white" />
   <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white" />
   <img alt="Svelte 5" src="https://img.shields.io/badge/Svelte-5-ff3e00?style=flat-square&logo=svelte&logoColor=white" />
