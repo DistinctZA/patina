@@ -106,6 +106,8 @@
     if (e.button !== 0 || !viewport || (e.target as Element).closest(".row, .cell")) return;
     const list = viewport;
     const box = list.getBoundingClientRect();
+    // A press on the scrollbar scrolls; it doesn't start a box or clear the selection.
+    if (e.clientX - box.left >= list.clientWidth || e.clientY - box.top >= list.clientHeight) return;
     // Content coordinates, so the box stays put while the list scrolls.
     const at = (ev: MouseEvent) => [ev.clientX - box.left + list.scrollLeft, ev.clientY - box.top + list.scrollTop];
     const [x0, y0] = at(e);

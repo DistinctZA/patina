@@ -1,6 +1,6 @@
 // Works out new names for batch rename, so the dialog can preview them live.
 // Rust does the renaming and checks the names again before touching anything.
-import type { Entry } from "./api";
+import { parentOf, type Entry } from "./api";
 
 export type RenameMode = "replace" | "add" | "format" | "case";
 
@@ -59,7 +59,8 @@ function changeCase(s: string, to: RenameOptions["caseTo"]): string {
 
 /**
  * The new name for each entry, in order, with an error where it can't be
- * used. `existing` holds the lowercased names already in the folder.
+ * used. `existing` holds the lowercased paths already there, so items from
+ * different folders (as in a tag view) only clash with their own neighbours.
  */
 export function newNames(entries: Entry[], o: RenameOptions, existing: Set<string>): Renamed[] {
   let pattern: RegExp | null = null;
@@ -93,19 +94,27 @@ export function newNames(entries: Entry[], o: RenameOptions, existing: Set<strin
         s = changeCase(s, o.caseTo);
         break;
     }
-    const name = s + ext;
-    const bad = !name.trim() || name === "." || name === ".." || name.includes("/");
+    // Rust trims names too, so preview what will actually be used.
+    const name = (s + ext).trim();
+    const bad = !name || name === "." || name === ".." || name.includes("/");
     return { entry, name, error: patternError ?? (bad ? "Not a valid name" : null) };
   });
 
   // Clashes, ignoring case as APFS does: with each other, and with files
   // outside the batch.
-  const renamedFrom = new Set(entries.map((e) => e.name.toLowerCase()));
+  const keyOf = (entry: Entry, name: string) => {
+    const dir = parentOf(entry.path);
+    return `${dir === "/" ? "" : dir}/${name}`.toLowerCase();
+  };
+  const renamedFrom = new Set(entries.map((e) => e.path.toLowerCase()));
   const counts = new Map<string, number>();
-  for (const r of out) counts.set(r.name.toLowerCase(), (counts.get(r.name.toLowerCase()) ?? 0) + 1);
+  for (const r of out) {
+    const key = keyOf(r.entry, r.name);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
   for (const r of out) {
     if (r.error) continue;
-    const key = r.name.toLowerCase();
+    const key = keyOf(r.entry, r.name);
     if ((counts.get(key) ?? 0) > 1) r.error = "Same name as another item";
     else if (existing.has(key) && !renamedFrom.has(key)) r.error = "Already exists";
   }

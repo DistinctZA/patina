@@ -147,7 +147,7 @@ fn run(plan: Vec<(PathBuf, PathBuf, Action)>, t: &mut Ticker) -> io::Result<()> 
         match action {
             Action::Rename => t.state.total_items += 1,
             Action::Copy | Action::CopyThenDelete => {
-                let (bytes, items) = measure(src);
+                let (bytes, items) = measure(src, t.cancel)?;
                 t.state.total_bytes += bytes;
                 t.state.total_items += items;
             }
@@ -168,7 +168,7 @@ fn run(plan: Vec<(PathBuf, PathBuf, Action)>, t: &mut Ticker) -> io::Result<()> 
                     Ok(()) => t.add(0, 1)?,
                     // A different volume after all (e.g. a mount point): copy instead.
                     Err(e) if e.kind() == ErrorKind::CrossesDevices => {
-                        let (bytes, items) = measure(&src);
+                        let (bytes, items) = measure(&src, t.cancel)?;
                         t.state.total_bytes += bytes;
                         t.state.total_items += items.saturating_sub(1);
                         copy_then_delete(&src, &target, dest_dev, t)?;
@@ -213,22 +213,24 @@ fn copy_cleanly(src: &Path, target: &Path, dest_dev: u64, t: &mut Ticker) -> io:
     result
 }
 
-/// Total bytes and item count (files, folders, links) under a path.
-fn measure(path: &Path) -> (u64, u64) {
-    let Ok(meta) = fs::symlink_metadata(path) else { return (0, 1) };
+/// Total bytes and item count (files, folders, links) under a path. Counting
+/// a huge folder can take a while, so it stops early on Cancel.
+fn measure(path: &Path, cancel: &AtomicBool) -> io::Result<(u64, u64)> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(io::Error::new(ErrorKind::Interrupted, "Cancelled"));
+    }
+    let Ok(meta) = fs::symlink_metadata(path) else { return Ok((0, 1)) };
     if meta.is_dir() {
-        fs::read_dir(path)
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .fold((0, 1), |(b, n), e| {
-                let (eb, en) = measure(&e.path());
-                (b + eb, n + en)
-            })
+        let mut total = (0, 1);
+        for item in fs::read_dir(path).into_iter().flatten().filter_map(Result::ok) {
+            let (bytes, items) = measure(&item.path(), cancel)?;
+            total = (total.0 + bytes, total.1 + items);
+        }
+        Ok(total)
     } else if meta.file_type().is_symlink() {
-        (0, 1)
+        Ok((0, 1))
     } else {
-        (meta.len(), 1)
+        Ok((meta.len(), 1))
     }
 }
 

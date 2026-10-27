@@ -192,7 +192,7 @@
     const pane = active;
     const targets = pane.targets();
     if (targets.length > 1) {
-      batch = { pane, entries: targets, existing: new Set(pane.all.map((e) => e.name.toLowerCase())) };
+      batch = { pane, entries: targets, existing: new Set(pane.all.map((e) => e.path.toLowerCase())) };
       return;
     }
     const entry = pane.current;
@@ -243,10 +243,21 @@
       value: pane.isFolder ? pane.path : home,
       selectAll: true,
       submit: async (value) => {
-        const path = value.trim().replace(/^~(?=\/|$)/, home);
+        let path = value.trim().replace(/^~(?=\/|$)/, home);
+        // "Documents" or "../Other" are relative to the folder you're in.
+        if (!path.startsWith("/")) path = `${pane.isFolder ? pane.path : home}/${path}`;
         await pane.load(path.length > 1 ? path.replace(/\/+$/, "") : path);
       },
     };
+  }
+
+  function appMouseDown(e: MouseEvent) {
+    const target = e.target as Element;
+    // Buttons don't take keyboard focus from the panes.
+    if (target.closest("button")) e.preventDefault();
+    // Clicking anywhere but text drops a text selection (say, in the
+    // preview), so ⌘C goes back to copying files.
+    if (!target.closest("pre, input, textarea, select, dd")) window.getSelection()?.removeAllRanges();
   }
 
   function searchKey(e: KeyboardEvent) {
@@ -423,9 +434,13 @@
       .then((d) => (sidebarData = d))
       .catch(showError);
 
+  // Saves go out one at a time, in order, so a quick run of changes can't
+  // finish out of order and leave an older version on disk.
+  let saving: Promise<unknown> = Promise.resolve();
   function saveSettings(next: Settings) {
     settings = next;
-    if (settingsReady) api.writeSettings(next).catch(showError);
+    if (!settingsReady) return;
+    saving = saving.then(() => api.writeSettings(next)).catch(showError);
   }
 
   /** The Favourites as shown, so the first edit starts from the defaults. */
@@ -452,6 +467,21 @@
     const at = to == null ? list.length : to > from ? to - 1 : to;
     list.splice(at, 0, item);
     setFavorites(list);
+  }
+
+  /** Adds the folders among files dropped from Finder (only paths are known). */
+  async function addDroppedFolders(paths: string[], index: number | null) {
+    const checked = await Promise.all(
+      paths.map((p) =>
+        api
+          .details(p)
+          .then((d) => (d.items != null && !p.endsWith(".app") ? p : null))
+          .catch(() => null),
+      ),
+    );
+    const folders = checked.filter((p): p is string => p != null);
+    if (folders.length) addFavorites(folders, index);
+    else showError("Only folders can be added to Favourites.");
   }
 
   function removeFavorite(path: string) {
@@ -530,6 +560,8 @@
     if (!p || !target || p.kind === "favorite") return null;
     // The gap under Favourites adds folders as new favourites.
     if (target.zone === "favorites" && target.path == null) {
+      // From Finder we only know paths; which are folders is checked on drop.
+      if (p.kind === "files") return { verb: "Add", dest: null };
       return p.kind === "entries" && p.entries.some((e) => e.isDir && !isApp(e)) ? { verb: "Add", dest: null } : null;
     }
     const dest = target.path;
@@ -566,6 +598,8 @@
     if (verdict.verb === "Add") {
       if (payload.kind === "entries") {
         addFavorites(payload.entries.filter((e) => e.isDir && !isApp(e)).map((e) => e.path), target.index);
+      } else if (payload.kind === "files") {
+        addDroppedFolders(payload.paths, target.index);
       }
       return;
     }
@@ -683,8 +717,8 @@
         endDrag();
       }
     });
-    // After a drag out (files may have moved), refresh.
     const unlistenProgress = listen<JobProgress>("transfer-progress", ({ payload }) => transfers.update(payload));
+    // After a drag out (files may have moved), refresh.
     const unlistenDragOut = listen<boolean>("drag-out-done", ({ payload: dropped }) => {
       if (dropped) refreshBoth().catch(showError);
     });
@@ -735,7 +769,7 @@
   class="app"
   class:no-sidebar={!showSidebar}
   role="presentation"
-  onmousedown={(e) => (e.target as Element).closest("button") && e.preventDefault()}
+  onmousedown={appMouseDown}
 >
   {#if showSidebar}
     <Sidebar

@@ -25,6 +25,9 @@ mod mac {
             .iter()
             .filter_map(|item| item.stringForType(unsafe { NSPasteboardTypeFileURL }))
             .filter_map(|url| NSURL::URLWithString(&url))
+            // Some apps copy file *reference* URLs (file:///.file/id=…);
+            // filePathURL turns those into ordinary paths.
+            .filter_map(|url| url.filePathURL())
             .filter_map(|url| url.path())
             .map(|path| path.to_string())
             .collect()

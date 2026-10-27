@@ -12,7 +12,7 @@
     onapply,
   }: {
     entries: Entry[];
-    /** Lowercased names already in the folder, to catch clashes early. */
+    /** Lowercased paths of what's already there, to catch clashes early. */
     existing: Set<string>;
     onclose: () => void;
     onapply: (renames: [string, string][]) => Promise<void>;

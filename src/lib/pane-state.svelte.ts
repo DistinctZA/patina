@@ -1,10 +1,13 @@
 // State for one file pane: the folder it shows, the cursor and the selection.
-import { api, basename, isApp, type Entry, type SortBy } from "./api";
+import { api, basename, isApp, parentOf, type Entry, type SortBy } from "./api";
 
 export type View = "grid" | "list" | "columns" | "gallery";
 
 /** Locations starting with this show every file carrying a Finder tag. */
 const TAG_PREFIX = "tag:";
+
+/** The folder is gone (Rust's wording for "not found", see `describe`). */
+const isMissing = (err: unknown) => String(err).includes("couldn't be found");
 
 export class PaneState {
   readonly id: string;
@@ -37,6 +40,8 @@ export class PaneState {
   private loadId = 0;
   /** The folder the Rust side is watching for this pane. */
   private watched = "";
+  /** A refresh asked for during a load; it runs once the load is done. */
+  private refreshPending = false;
   private back = $state<string[]>([]);
   private forward = $state<string[]>([]);
 
@@ -70,9 +75,10 @@ export class PaneState {
 
   /**
    * Shows `location`. `focus` puts the cursor on that entry (by path); `keep`
-   * preserves the cursor, selection and search, for refreshes.
+   * preserves the cursor, selection and search, for refreshes. Resolves to
+   * false if a newer load overtook this one (so nothing changed).
    */
-  async load(location: string, opts: { focus?: string; keep?: boolean; history?: boolean } = {}) {
+  async load(location: string, opts: { focus?: string; keep?: boolean; history?: boolean } = {}): Promise<boolean> {
     const id = ++this.loadId;
     this.loading = true;
     try {
@@ -80,7 +86,7 @@ export class PaneState {
       const listing = tag
         ? await api.findTagged(tag, this.showHidden, this.sortBy, this.desc)
         : await api.listDir(location, this.showHidden, this.sortBy, this.desc);
-      if (id !== this.loadId) return;
+      if (id !== this.loadId) return false;
 
       if (opts.history !== false && this.path && listing.path !== this.path) {
         this.back.push(this.path);
@@ -110,13 +116,46 @@ export class PaneState {
         this.watched = listing.path;
         api.watchDir(this.id, listing.path).catch(() => (this.watched = ""));
       }
+      return true;
     } finally {
-      if (id === this.loadId) this.loading = false;
+      if (id === this.loadId) {
+        this.loading = false;
+        if (this.refreshPending) {
+          this.refreshPending = false;
+          queueMicrotask(() => this.refresh().catch(() => {}));
+        }
+      }
     }
   }
 
-  refresh() {
-    return this.load(this.path, { keep: true });
+  /**
+   * Re-reads the folder, keeping the cursor, selection and search. If you're
+   * in the middle of opening another folder it waits, rather than undoing
+   * that. If the folder has gone (deleted, or moved away), it steps up to the
+   * nearest folder that still exists.
+   */
+  async refresh(): Promise<void> {
+    if (this.loading) {
+      this.refreshPending = true;
+      return;
+    }
+    try {
+      await this.load(this.path, { keep: true });
+    } catch (err) {
+      if (this.tag || !isMissing(err)) throw err;
+      await this.climbToExisting();
+    }
+  }
+
+  private async climbToExisting() {
+    for (let dir = parentOf(this.path); ; dir = parentOf(dir)) {
+      try {
+        await this.load(dir, { history: false });
+        return;
+      } catch {
+        if (dir === "/") return;
+      }
+    }
   }
 
   goUp() {
@@ -131,18 +170,26 @@ export class PaneState {
     return this.forward.length > 0;
   }
 
-  goBack() {
-    const prev = this.back.pop();
+  // History only moves once the folder has actually opened, so a failed or
+  // overtaken step leaves back and forward as they were.
+  async goBack() {
+    const prev = this.back.at(-1);
     if (!prev) return;
-    this.forward.push(this.path);
-    return this.load(prev, { history: false });
+    const from = this.path;
+    if (await this.load(prev, { history: false })) {
+      this.back.pop();
+      this.forward.push(from);
+    }
   }
 
-  goForward() {
-    const next = this.forward.pop();
+  async goForward() {
+    const next = this.forward.at(-1);
     if (!next) return;
-    this.back.push(this.path);
-    return this.load(next, { history: false });
+    const from = this.path;
+    if (await this.load(next, { history: false })) {
+      this.forward.pop();
+      this.back.push(from);
+    }
   }
 
   open(entry: Entry | undefined = this.current) {

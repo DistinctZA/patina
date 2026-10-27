@@ -86,6 +86,48 @@ pub fn system_icon_png(_path: &Path, _size: u32) -> Option<Vec<u8>> {
     None
 }
 
+const KEEP_FOR: Duration = Duration::from_secs(60 * 24 * 60 * 60);
+const MAX_CACHE_BYTES: u64 = 400 << 20;
+const PRUNED_CACHE_BYTES: u64 = 300 << 20;
+
+/// Trims the cache: leftover work folders, entries older than 60 days, then
+/// the oldest entries while it's over 400 MB. Runs in the background at launch.
+pub fn prune(cache_dir: &Path) {
+    let Ok(items) = fs::read_dir(cache_dir) else { return };
+    let now = std::time::SystemTime::now();
+    let age = |m: &fs::Metadata| m.modified().ok().and_then(|t| now.duration_since(t).ok()).unwrap_or_default();
+
+    let mut kept: Vec<(PathBuf, u64, Duration)> = Vec::new();
+    for item in items.filter_map(Result::ok) {
+        let path = item.path();
+        let Ok(meta) = item.metadata() else { continue };
+        let name = item.file_name().to_string_lossy().into_owned();
+        if meta.is_dir() {
+            // An interrupted thumbnail's work folder.
+            if name.starts_with("tmp-") && age(&meta) > Duration::from_secs(3600) {
+                let _ = fs::remove_dir_all(&path);
+            }
+        } else if age(&meta) > KEEP_FOR {
+            let _ = fs::remove_file(&path);
+        } else {
+            kept.push((path, meta.len(), age(&meta)));
+        }
+    }
+
+    let mut total: u64 = kept.iter().map(|(_, size, _)| size).sum();
+    if total > MAX_CACHE_BYTES {
+        kept.sort_by(|a, b| b.2.cmp(&a.2)); // oldest first
+        for (path, size, _) in kept {
+            if total <= PRUNED_CACHE_BYTES {
+                break;
+            }
+            if fs::remove_file(&path).is_ok() {
+                total -= size;
+            }
+        }
+    }
+}
+
 /// The file whose picture represents `path`. Wallpapers in
 /// /System/Library/Desktop Pictures are small `.madesktop` descriptors that
 /// Quick Look can't draw; each names a ready-made image to use instead.
@@ -198,6 +240,24 @@ mod tests {
         fs::create_dir_all(&cache).unwrap();
         fs::write(&text, "Patina thumbnail test\n".repeat(40)).unwrap();
         assert!(thumbnail(&cache, &text, 128).unwrap().is_some());
+        fs::remove_dir_all(&cache).unwrap();
+    }
+
+    #[test]
+    fn prune_removes_old_entries_and_leftovers() {
+        let cache = std::env::temp_dir().join(format!("patina-prune-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&cache);
+        fs::create_dir_all(cache.join("tmp-stale")).unwrap();
+        fs::write(cache.join("fresh.png"), b"x").unwrap();
+        fs::write(cache.join("old.png"), b"x").unwrap();
+        let long_ago = std::time::SystemTime::now() - Duration::from_secs(90 * 24 * 60 * 60);
+        fs::File::options().write(true).open(cache.join("old.png")).unwrap().set_modified(long_ago).unwrap();
+        fs::File::open(cache.join("tmp-stale")).unwrap().set_modified(long_ago).unwrap();
+
+        prune(&cache);
+        assert!(cache.join("fresh.png").exists());
+        assert!(!cache.join("old.png").exists());
+        assert!(!cache.join("tmp-stale").exists());
         fs::remove_dir_all(&cache).unwrap();
     }
 

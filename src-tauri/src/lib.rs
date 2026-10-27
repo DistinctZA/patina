@@ -104,8 +104,11 @@ async fn write_settings(app: AppHandle, settings: serde_json::Value) -> Result<(
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        // Write then rename, so a crash mid-save can't leave a half-written file.
-        let tmp = path.with_extension("json.tmp");
+        // Write then rename, so a crash mid-save can't leave a half-written
+        // file. Each save gets its own temporary name, so two saves can never
+        // write into the same one.
+        static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let tmp = path.with_extension(format!("json.{}.tmp", SAVES.fetch_add(1, Ordering::Relaxed)));
         std::fs::write(&tmp, serde_json::to_vec_pretty(&settings)?)?;
         std::fs::rename(&tmp, &path)
     })
@@ -340,6 +343,11 @@ pub fn run() {
             })?;
             watcher.watch(Path::new("/Volumes"), RecursiveMode::NonRecursive)?;
             app.state::<Watchers>().0.lock().unwrap().insert("volumes".into(), watcher);
+
+            // Keep the thumbnail cache from growing forever.
+            if let Ok(cache) = app.path().app_cache_dir() {
+                std::thread::spawn(move || thumbs::prune(&cache.join("thumbs")));
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

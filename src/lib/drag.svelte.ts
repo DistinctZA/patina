@@ -173,7 +173,13 @@ export function startDrag(e: MouseEvent, make: () => DragPayload | null) {
 
   const key = (ev: KeyboardEvent) => {
     if (!started) return;
-    if (ev.key === "Escape") return stop();
+    if (ev.key === "Escape") {
+      // Cancelling the drag is all Escape does; the page shouldn't also
+      // clear the selection or close a panel.
+      ev.stopPropagation();
+      ev.preventDefault();
+      return stop();
+    }
     modifiers(ev);
   };
 

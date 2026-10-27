@@ -197,7 +197,8 @@ pub struct Details {
     pub mode: u32,
     pub owner: String,
     pub group: String,
-    /// Number of items inside, for folders.
+    /// Number of items inside, for folders (not counting dotfiles, which the
+    /// pane hides by default).
     pub items: Option<usize>,
     pub link_target: Option<String>,
 }
@@ -206,7 +207,11 @@ pub fn details(path: &Path) -> io::Result<Details> {
     let meta = fs::metadata(path).or_else(|_| fs::symlink_metadata(path))?;
     let items = meta
         .is_dir()
-        .then(|| fs::read_dir(path).map(|d| d.count()).ok())
+        .then(|| {
+            fs::read_dir(path)
+                .map(|d| d.filter_map(Result::ok).filter(|e| !e.file_name().as_bytes().starts_with(b".")).count())
+                .ok()
+        })
         .flatten();
     Ok(Details {
         size: meta.len(),
