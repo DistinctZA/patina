@@ -172,7 +172,8 @@
             </div>
           {/each}
           <div class="tail" class:insert-before={dropAt === (data?.favorites.length ?? 0)}>
-            {#if drag.payload?.kind === "entries"}Drop folders here to add them{/if}
+            <!-- The hint also gives the drop zone some height to aim at. -->
+            {#if drag.payload?.kind === "entries" || drag.payload?.kind === "files"}Drop folders here to add them{/if}
           </div>
         </div>
       {/if}

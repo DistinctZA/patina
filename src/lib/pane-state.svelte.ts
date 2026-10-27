@@ -170,25 +170,29 @@ export class PaneState {
     return this.forward.length > 0;
   }
 
-  // History only moves once the folder has actually opened, so a failed or
-  // overtaken step leaves back and forward as they were.
-  async goBack() {
-    const prev = this.back.at(-1);
-    if (!prev) return;
-    const from = this.path;
-    if (await this.load(prev, { history: false })) {
-      this.back.pop();
-      this.forward.push(from);
-    }
+  goBack() {
+    return this.step(this.back, this.forward);
   }
 
-  async goForward() {
-    const next = this.forward.at(-1);
-    if (!next) return;
-    const from = this.path;
-    if (await this.load(next, { history: false })) {
-      this.forward.pop();
-      this.back.push(from);
+  goForward() {
+    return this.step(this.forward, this.back);
+  }
+
+  // History only moves once the folder has actually opened, so a failed or
+  // overtaken step leaves it as it was. A folder that's gone for good is
+  // dropped, though, so the next step can get past it.
+  private async step(from: string[], to: string[]) {
+    const target = from.at(-1);
+    if (!target) return;
+    const here = this.path;
+    try {
+      if (await this.load(target, { history: false })) {
+        from.pop();
+        to.push(here);
+      }
+    } catch (err) {
+      if (isMissing(err) && from.at(-1) === target) from.pop();
+      throw err;
     }
   }
 
@@ -245,6 +249,28 @@ export class PaneState {
     } else {
       this.moveCursor(index);
     }
+  }
+
+  /**
+   * A press on an item, before any drag. As in Finder, pressing an item
+   * that's part of a selection keeps all of it, so it can be dragged
+   * together; letting go without dragging then narrows it to that item.
+   * Right-clicks are left to the menu, which selects for itself.
+   */
+  press(index: number, e: MouseEvent) {
+    if (e.button !== 0 || e.ctrlKey) return;
+    const path = this.entries[index]?.path;
+    if (path == null) return;
+    if (e.shiftKey || e.metaKey || this.selected.size < 2 || !this.selected.has(path)) {
+      this.click(index, e);
+      return;
+    }
+    const release = (up: MouseEvent) => {
+      window.removeEventListener("mouseup", release);
+      // Same distance as a drag needs to start.
+      if (Math.hypot(up.clientX - e.clientX, up.clientY - e.clientY) < 5) this.moveCursor(index);
+    };
+    window.addEventListener("mouseup", release);
   }
 
   /** Selects exactly these paths (from a drag-to-select box). */

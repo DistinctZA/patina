@@ -108,6 +108,11 @@
     const box = list.getBoundingClientRect();
     // A press on the scrollbar scrolls; it doesn't start a box or clear the selection.
     if (e.clientX - box.left >= list.clientWidth || e.clientY - box.top >= list.clientHeight) return;
+    // No text selection while drawing the box: it would reach the preview's
+    // text, and ⌘C would then copy that instead of the files. Focus still
+    // leaves the search field, as with any click.
+    e.preventDefault();
+    (document.activeElement as HTMLElement | null)?.blur();
     // Content coordinates, so the box stays put while the list scrolls.
     const at = (ev: MouseEvent) => [ev.clientX - box.left + list.scrollLeft, ev.clientY - box.top + list.scrollTop];
     const [x0, y0] = at(e);
@@ -175,7 +180,7 @@
 
   /** Select on press; dragging afterwards carries the selection. */
   function pickRow(index: number, e: MouseEvent) {
-    pane.click(index, e);
+    pane.press(index, e);
     startDrag(e, () => ({ kind: "entries", entries: pane.targets() }));
   }
 

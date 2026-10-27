@@ -79,7 +79,7 @@
           class:active
           style:transform="translateX({index * CELL + 8}px)"
           onmousedown={(e) => {
-            pane.click(index, e);
+            pane.press(index, e);
             startDrag(e, () => ({ kind: "entries", entries: pane.targets() }));
           }}
           ondblclick={() => pane.open(entry)}

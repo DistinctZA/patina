@@ -127,7 +127,7 @@
     selected={pane.selected}
     focused={active}
     onrowdown={(i, e) => {
-      pane.click(i, e);
+      pane.press(i, e);
       startDrag(e, () => ({ kind: "entries", entries: pane.targets() }));
     }}
     onrowdbl={(entry) => pane.open(entry)}
