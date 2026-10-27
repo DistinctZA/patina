@@ -1,13 +1,15 @@
 mod fs_ops;
 mod pasteboard;
 mod thumbs;
+mod transfer;
 
-use fs_ops::{Details, Listing, Sidebar, SortBy, TextPreview, Transfer};
+use fs_ops::{Details, Listing, Sidebar, SortBy, TextPreview};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::Semaphore;
@@ -35,7 +37,19 @@ where
     tauri::async_runtime::spawn_blocking(f)
         .await
         .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+        .map_err(|e| describe(&e))
+}
+
+/// Plain words for the common failures; Patina's own messages pass through.
+fn describe(e: &std::io::Error) -> String {
+    use std::io::ErrorKind::*;
+    match e.kind() {
+        StorageFull => "There isn't enough space on the destination disk".into(),
+        ReadOnlyFilesystem => "That disk is read-only".into(),
+        PermissionDenied => "Permission denied: you may need to allow Patina in Privacy & Security, or change the folder's permissions".into(),
+        NotFound if e.raw_os_error().is_some() => "The item couldn't be found; it may have been moved or deleted".into(),
+        _ => e.to_string(),
+    }
 }
 
 fn to_paths(paths: Vec<String>) -> Vec<PathBuf> {
@@ -123,16 +137,74 @@ async fn thumbnail(
         .map(|p| p.map(|p| p.to_string_lossy().into_owned()))
 }
 
+/// Running copies and moves, by the id the UI gave them, so they can be cancelled.
+#[derive(Default)]
+struct Jobs(Mutex<HashMap<String, Arc<AtomicBool>>>);
+
+#[derive(Serialize, Clone)]
+struct JobProgress {
+    id: String,
+    #[serde(flatten)]
+    progress: transfer::Progress,
+}
+
+/// Runs a copy/move job on a blocking thread, emitting `transfer-progress`
+/// as it goes. A cancelled job fails with "Cancelled".
+async fn run_job(
+    app: AppHandle,
+    jobs: State<'_, Jobs>,
+    id: String,
+    work: impl FnOnce(&mut transfer::Ticker) -> std::io::Result<()> + Send + 'static,
+) -> Result<(), String> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    jobs.0.lock().unwrap().insert(id.clone(), cancel.clone());
+    let job_id = id.clone();
+    let result = blocking(move || {
+        let mut ticker = transfer::Ticker::new(&cancel, |progress| {
+            let _ = app.emit("transfer-progress", JobProgress { id: job_id.clone(), progress: progress.clone() });
+        });
+        work(&mut ticker)
+    })
+    .await;
+    jobs.0.lock().unwrap().remove(&id);
+    result
+}
+
 /// Copies or moves files into `dest`. `mode` is "copy", "move", or "auto"
 /// (move within a disk, copy to another one, like dragging in Finder).
 #[tauri::command]
-async fn transfer(sources: Vec<String>, dest: String, mode: String) -> Result<(), String> {
-    blocking(move || fs_ops::transfer(&to_paths(sources), Path::new(&dest), Transfer::parse(&mode))).await
+async fn transfer(
+    app: AppHandle,
+    jobs: State<'_, Jobs>,
+    id: String,
+    sources: Vec<String>,
+    dest: String,
+    mode: String,
+) -> Result<(), String> {
+    let mode = transfer::Mode::parse(&mode);
+    run_job(app, jobs, id, move |t| transfer::transfer(&to_paths(sources), Path::new(&dest), mode, t)).await
 }
 
 #[tauri::command]
-async fn duplicate(paths: Vec<String>) -> Result<(), String> {
-    blocking(move || fs_ops::duplicate(&to_paths(paths))).await
+async fn duplicate(app: AppHandle, jobs: State<'_, Jobs>, id: String, paths: Vec<String>) -> Result<(), String> {
+    run_job(app, jobs, id, move |t| transfer::duplicate(&to_paths(paths), t)).await
+}
+
+#[tauri::command]
+fn cancel_transfer(jobs: State<Jobs>, id: String) {
+    if let Some(flag) = jobs.0.lock().unwrap().get(&id) {
+        flag.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Renames several items at once: `renames` is a list of (path, new name).
+#[tauri::command]
+async fn rename_many(renames: Vec<(String, String)>) -> Result<(), String> {
+    blocking(move || {
+        let renames: Vec<(PathBuf, String)> = renames.into_iter().map(|(p, n)| (PathBuf::from(p), n)).collect();
+        fs_ops::rename_many(&renames)
+    })
+    .await
 }
 
 // Clipboard commands are synchronous, so Tauri runs them on the main thread,
@@ -186,16 +258,6 @@ fn drag_out(_paths: Vec<String>, _move_files: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn copy_into(sources: Vec<String>, dest: String) -> Result<(), String> {
-    blocking(move || fs_ops::copy_into(&to_paths(sources), Path::new(&dest))).await
-}
-
-#[tauri::command]
-async fn move_into(sources: Vec<String>, dest: String) -> Result<(), String> {
-    blocking(move || fs_ops::move_into(&to_paths(sources), Path::new(&dest))).await
-}
-
-#[tauri::command]
 async fn rename(path: String, new_name: String) -> Result<String, String> {
     blocking(move || fs_ops::rename(Path::new(&path), &new_name))
         .await
@@ -246,11 +308,27 @@ fn watch_dir(app: AppHandle, watchers: State<Watchers>, pane: String, path: Stri
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::describe;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn common_errors_read_plainly() {
+        // ENOSPC, as a full disk reports it.
+        assert_eq!(describe(&Error::from_raw_os_error(28)), "There isn't enough space on the destination disk");
+        assert!(describe(&Error::from_raw_os_error(2)).starts_with("The item couldn't be found"));
+        // Patina's own messages are kept.
+        assert_eq!(describe(&Error::new(ErrorKind::AlreadyExists, "\"a\" already exists")), "\"a\" already exists");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(Watchers::default())
+        .manage(Jobs::default())
         .manage(ThumbSlots(Semaphore::new(4)))
         .setup(|app| {
             // Tell the sidebar when a drive is plugged in or ejected.
@@ -279,8 +357,8 @@ pub fn run() {
             clipboard_copy,
             clipboard_paste,
             drag_out,
-            copy_into,
-            move_into,
+            cancel_transfer,
+            rename_many,
             rename,
             create_folder,
             move_to_trash,

@@ -23,7 +23,10 @@
     X,
   } from "@lucide/svelte";
   import { api, basename, isApp, parentOf, type Entry, type Settings, type SidebarData, type TransferMode } from "$lib/api";
+  import BatchRename from "$lib/BatchRename.svelte";
   import ContextMenu, { type MenuItem } from "$lib/ContextMenu.svelte";
+  import TransferPanel from "$lib/TransferPanel.svelte";
+  import { isCancelled, transfers, type JobProgress } from "$lib/transfers.svelte";
   import {
     drag,
     dropHere,
@@ -101,8 +104,7 @@
     const paths = active.targets().map((e) => e.path);
     if (!paths.length) return;
     if (!other.isFolder) return showError("Open a folder in the other pane first.");
-    const op = kind === "copy" ? api.copyInto : api.moveInto;
-    run(() => op(paths, other.path).then(refreshBoth));
+    moveOrCopy(paths, other.path, kind);
   }
 
   function trash() {
@@ -110,9 +112,22 @@
     if (paths.length) run(() => api.moveToTrash(paths).then(refreshBoth));
   }
 
-  /** Copies or moves files into a folder, then refreshes what's on screen. */
+  /** A copy or move ended badly: say so (unless it was cancelled), then refresh. */
+  function jobFailed(err: unknown) {
+    if (isCancelled(err)) showNote("Cancelled");
+    else showError(err);
+    refreshBoth().catch(showError);
+  }
+
+  /**
+   * Copies or moves files into a folder as a job: long ones show progress
+   * with a Cancel button, and the rest of the app stays usable meanwhile.
+   */
   function moveOrCopy(paths: string[], dest: string, mode: TransferMode) {
-    if (paths.length) run(() => api.transfer(paths, dest, mode).then(refreshBoth));
+    if (!paths.length) return;
+    transfers
+      .run(mode === "copy" ? "Copying" : "Moving", (id) => api.transfer(id, paths, dest, mode))
+      .then(refreshBoth, jobFailed);
   }
 
   const itemsLabel = (entries: Entry[]) => (entries.length === 1 ? `“${entries[0].name}”` : `${entries.length} items`);
@@ -127,17 +142,16 @@
   function paste(move = false) {
     const pane = active;
     if (!pane.isFolder) return showError("Open a folder to paste into.");
-    run(async () => {
-      const paths = await api.clipboardPaste();
-      if (!paths.length) return showNote("Nothing to paste");
-      await api.transfer(paths, pane.path, move ? "move" : "copy");
-      await refreshBoth();
-    });
+    api
+      .clipboardPaste()
+      .then((paths) => (paths.length ? moveOrCopy(paths, pane.path, move ? "move" : "copy") : showNote("Nothing to paste")))
+      .catch(showError);
   }
 
   function duplicate() {
     const paths = active.targets().map((e) => e.path);
-    if (paths.length) run(() => api.duplicate(paths).then(refreshBoth));
+    if (!paths.length) return;
+    transfers.run("Duplicating", (id) => api.duplicate(id, paths)).then(refreshBoth, jobFailed);
   }
 
   function copyPaths(entries: Entry[]) {
@@ -162,8 +176,25 @@
     };
   }
 
+  /** Batch rename: the items being renamed, and the pane they're in. */
+  let batch = $state<{ pane: PaneState; entries: Entry[]; existing: Set<string> } | null>(null);
+
+  async function applyBatch(renames: [string, string][]) {
+    const pane = batch!.pane;
+    await api.renameMany(renames);
+    await pane.refresh();
+    // Keep the renamed items selected under their new names.
+    pane.selectPaths(new Set(renames.map(([from, name]) => parentOf(from) + "/" + name)));
+  }
+
+  /** F2: one item gets a quick rename; several open Batch Rename. */
   function rename() {
     const pane = active;
+    const targets = pane.targets();
+    if (targets.length > 1) {
+      batch = { pane, entries: targets, existing: new Set(pane.all.map((e) => e.name.toLowerCase())) };
+      return;
+    }
     const entry = pane.current;
     if (!entry) return;
     prompt = {
@@ -238,6 +269,10 @@
   function onKey(e: KeyboardEvent) {
     if (prompt) {
       if (e.key === "Escape") prompt = null;
+      return;
+    }
+    if (batch) {
+      if (e.key === "Escape") batch = null;
       return;
     }
     if (menu) return;
@@ -582,7 +617,7 @@
       { label: "Copy to Other Pane", shortcut: "F5", disabled: !other.isFolder, action: () => transfer("copy") },
       { label: "Move to Other Pane", shortcut: "F6", disabled: !other.isFolder, action: () => transfer("move") },
       "separator",
-      { label: "Rename…", shortcut: "F2", disabled: !one, action: rename },
+      { label: one ? "Rename…" : `Rename ${targets.length} Items…`, shortcut: "F2", action: rename },
       { label: "Add to Favourites", disabled: !folders.length, action: () => addFavorites(folders.map((f) => f.path), null) },
       { label: one ? "Copy Path" : "Copy Paths", action: () => copyPaths(targets) },
       "separator",
@@ -649,6 +684,7 @@
       }
     });
     // After a drag out (files may have moved), refresh.
+    const unlistenProgress = listen<JobProgress>("transfer-progress", ({ payload }) => transfers.update(payload));
     const unlistenDragOut = listen<boolean>("drag-out-done", ({ payload: dropped }) => {
       if (dropped) refreshBoth().catch(showError);
     });
@@ -678,6 +714,7 @@
       unlistenVolumes.then((fn) => fn());
       unlistenDrop.then((fn) => fn());
       unlistenDragOut.then((fn) => fn());
+      unlistenProgress.then((fn) => fn());
     };
   });
 
@@ -834,6 +871,12 @@
         <em class="verb">{drag.verdict.verb === "Add" ? "+ Favourites" : drag.verdict.verb}</em>
       {/if}
     </div>
+  {/if}
+
+  <TransferPanel />
+
+  {#if batch}
+    <BatchRename entries={batch.entries} existing={batch.existing} onclose={() => (batch = null)} onapply={applyBatch} />
   {/if}
 
   {#if menu}

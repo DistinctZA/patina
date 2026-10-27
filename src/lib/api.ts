@@ -79,16 +79,18 @@ export const api = {
   details: (path: string) => invoke<Details>("details", { path }),
   readText: (path: string) => invoke<TextPreview | null>("read_text", { path }),
   thumbnail: (path: string, size: number) => invoke<string | null>("thumbnail", { path, size }),
-  transfer: (sources: string[], dest: string, mode: TransferMode) =>
-    invoke<void>("transfer", { sources, dest, mode }),
-  duplicate: (paths: string[]) => invoke<void>("duplicate", { paths }),
+  /** `id` names the job, for its progress events and for cancelling it. */
+  transfer: (id: string, sources: string[], dest: string, mode: TransferMode) =>
+    invoke<void>("transfer", { id, sources, dest, mode }),
+  duplicate: (id: string, paths: string[]) => invoke<void>("duplicate", { id, paths }),
+  cancelTransfer: (id: string) => invoke<void>("cancel_transfer", { id }),
+  /** Renames several items at once; pairs of [path, new name]. */
+  renameMany: (renames: [string, string][]) => invoke<void>("rename_many", { renames }),
   /** The system clipboard, shared with Finder. */
   clipboardCopy: (paths: string[]) => invoke<void>("clipboard_copy", { paths }),
   clipboardPaste: () => invoke<string[]>("clipboard_paste"),
   /** Hands a drag over to macOS, for dropping into Finder or other apps. */
   dragOut: (paths: string[], moveFiles: boolean) => invoke<void>("drag_out", { paths, moveFiles }),
-  copyInto: (sources: string[], dest: string) => invoke<void>("copy_into", { sources, dest }),
-  moveInto: (sources: string[], dest: string) => invoke<void>("move_into", { sources, dest }),
   rename: (path: string, newName: string) => invoke<string>("rename", { path, newName }),
   createFolder: (dir: string, name: string) => invoke<string>("create_folder", { dir, name }),
   moveToTrash: (paths: string[]) => invoke<void>("move_to_trash", { paths }),

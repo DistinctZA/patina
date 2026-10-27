@@ -59,6 +59,8 @@ npm install && npm run tauri dev
 | 🖱️ **Drag and drop** | Drag between panes, onto any folder, breadcrumb or sidebar item, in from Finder, or out to Finder and other apps. Moves on the same disk and copies to another, like Finder; hold ⌥ to copy or ⌘ to move. Hold over a folder to spring it open; lists scroll at their edges. |
 | ⬚ **Drag to select** | Drag a box across empty space to select; ⌘ or ⇧ adds to the selection. |
 | 📋 **Copy & paste with Finder** | ⌘C / ⌘V share the system clipboard with Finder, ⌥⌘V moves, ⌘D duplicates. Clashes become `name copy`, never overwritten. |
+| ✏️ **Batch rename** | Select several items and press F2: replace text (or a regular expression), add text, number them ("Holiday 001"), or change case, with a live preview that flags clashes before anything is renamed. |
+| 📊 **Copy progress** | Long copies and moves show progress, time left and a Cancel button; cancelling never leaves half-copied files. Same-disk copies stay instant (APFS clones). |
 | 🖱️ **Right-click menus** | Open, Copy, Paste, Duplicate, Rename, Add to Favourites, Copy Path, Move to Bin, and view options. |
 | 🍏 **APFS clones** | Copies on the same disk are instant and take no extra space. |
 | 🔄 **Live refresh** | Panes update by themselves when files change on disk (FSEvents). |
@@ -83,7 +85,7 @@ npm install && npm run tauri dev
 | Back / forward | <kbd>⌘</kbd><kbd>[</kbd> / <kbd>⌘</kbd><kbd>]</kbd> |
 | Copy to other pane | <kbd>F5</kbd> |
 | Move to other pane | <kbd>F6</kbd> |
-| Rename | <kbd>F2</kbd> |
+| Rename (several selected: Batch Rename) | <kbd>F2</kbd> |
 | New folder | <kbd>F7</kbd> or <kbd>⌘</kbd><kbd>⇧</kbd><kbd>N</kbd> |
 | Move to Bin | <kbd>F8</kbd> or <kbd>⌘</kbd><kbd>⌫</kbd> |
 | Show / hide hidden files | <kbd>⌘</kbd><kbd>⇧</kbd><kbd>.</kbd> |
@@ -190,6 +192,9 @@ The script bumps the version everywhere it appears, runs the checks and tests, b
 | `src/lib/drag.svelte.ts` | Drag and drop within the window |
 | `src/lib/ContextMenu.svelte` | Right-click menus |
 | `src-tauri/src/pasteboard.rs` | Files on the system clipboard, shared with Finder |
+| `src-tauri/src/transfer.rs` | Copy and move with progress and cancel |
+| `src/lib/BatchRename.svelte`, `batch-rename.ts` | Batch Rename dialog and its naming rules |
+| `src/lib/TransferPanel.svelte`, `transfers.svelte.ts` | Progress panel for copies and moves |
 | `src/lib/Sidebar.svelte` | Drives, favourites (drag to add or reorder) and tags |
 | `src/lib/Preview.svelte` | Preview and the customisable Info section |
 | `src/routes/+page.svelte` | Layout, toolbar, search, shortcuts and dialogs |
@@ -205,15 +210,15 @@ The script bumps the version everywhere it appears, runs the checks and tests, b
 - [x] Columns and Gallery views, Material file-type icons
 - [x] Drag folders into Favourites; collapsible sidebar sections
 - [x] Recents, and a right-click menu to show or hide sidebar sections
-- [ ] Tabs in each pane
-- [ ] Quick Open (fuzzy search across folders)
-- [ ] Batch rename
-- [ ] Folder compare & sync
-- [ ] Full-screen Quick Look (<kbd>Space</kbd>)
+- [x] Batch rename
 - [x] Drag and drop between panes, onto folders and the sidebar, and in from Finder
 - [x] Copy and paste files with Finder, duplicate, right-click menus, Go to Folder
 - [x] Drag out to Finder and other apps, spring-loaded folders, drag to select
-- [ ] Copy progress for large transfers
+- [x] Copy progress, with Cancel
+- [ ] Tabs in each pane
+- [ ] Quick Open (fuzzy search across folders)
+- [ ] Folder compare & sync
+- [ ] Full-screen Quick Look (<kbd>Space</kbd>)
 
 ---
 

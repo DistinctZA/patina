@@ -462,13 +462,13 @@ fn exists(p: &Path) -> bool {
     fs::symlink_metadata(p).is_ok()
 }
 
-fn file_name(src: &Path) -> io::Result<String> {
+pub(crate) fn file_name(src: &Path) -> io::Result<String> {
     src.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Can't use the root folder here"))
 }
 
-fn check_not_into_itself(src: &Path, dest_dir: &Path) -> io::Result<()> {
+pub(crate) fn check_not_into_itself(src: &Path, dest_dir: &Path) -> io::Result<()> {
     let dest = fs::canonicalize(dest_dir)?;
     if let Ok(src) = fs::canonicalize(src) {
         if dest.starts_with(&src) {
@@ -479,104 +479,6 @@ fn check_not_into_itself(src: &Path, dest_dir: &Path) -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<()> {
-    for src in sources {
-        check_not_into_itself(src, dest_dir)?;
-        let is_dir = fs::symlink_metadata(src)?.is_dir();
-        let target = unique_target(dest_dir, &file_name(src)?, is_dir);
-        copy_recursive(src, &target)?;
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Transfer {
-    Copy,
-    Move,
-    /// Like Finder: move within a disk, copy to another one.
-    Auto,
-}
-
-impl Transfer {
-    pub fn parse(s: &str) -> Self {
-        match s {
-            "copy" => Self::Copy,
-            "move" => Self::Move,
-            _ => Self::Auto,
-        }
-    }
-}
-
-pub fn transfer(sources: &[PathBuf], dest_dir: &Path, mode: Transfer) -> io::Result<()> {
-    match mode {
-        Transfer::Copy => copy_into(sources, dest_dir),
-        Transfer::Move => move_into(sources, dest_dir),
-        Transfer::Auto => {
-            let dest_dev = fs::metadata(dest_dir)?.dev();
-            let (same_disk, other_disk): (Vec<PathBuf>, Vec<PathBuf>) = sources
-                .iter()
-                .cloned()
-                .partition(|s| fs::symlink_metadata(s).is_ok_and(|m| m.dev() == dest_dev));
-            move_into(&same_disk, dest_dir)?;
-            copy_into(&other_disk, dest_dir)
-        }
-    }
-}
-
-/// Copies each item next to itself ("name copy", like Finder's Duplicate).
-pub fn duplicate(sources: &[PathBuf]) -> io::Result<()> {
-    for src in sources {
-        let parent = src
-            .parent()
-            .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Can't duplicate the root folder"))?;
-        copy_into(std::slice::from_ref(src), parent)?;
-    }
-    Ok(())
-}
-
-pub fn move_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<()> {
-    for src in sources {
-        if src.parent() == Some(dest_dir) {
-            continue;
-        }
-        check_not_into_itself(src, dest_dir)?;
-        let is_dir = fs::symlink_metadata(src)?.is_dir();
-        let target = unique_target(dest_dir, &file_name(src)?, is_dir);
-        match fs::rename(src, &target) {
-            Ok(()) => {}
-            // Different volume: copy, then remove the original.
-            Err(e) if e.kind() == ErrorKind::CrossesDevices => {
-                copy_recursive(src, &target)?;
-                if is_dir {
-                    fs::remove_dir_all(src)?;
-                } else {
-                    fs::remove_file(src)?;
-                }
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(())
-}
-
-/// Copies files, folders and symlinks (as links). On APFS `fs::copy` clones
-/// the file, so large copies on the same disk are instant.
-fn copy_recursive(src: &Path, dest: &Path) -> io::Result<()> {
-    let meta = fs::symlink_metadata(src)?;
-    if meta.file_type().is_symlink() {
-        std::os::unix::fs::symlink(fs::read_link(src)?, dest)
-    } else if meta.is_dir() {
-        fs::create_dir(dest)?;
-        for item in fs::read_dir(src)? {
-            let item = item?;
-            copy_recursive(&item.path(), &dest.join(item.file_name()))?;
-        }
-        Ok(())
-    } else {
-        fs::copy(src, dest).map(|_| ())
-    }
 }
 
 fn validate_name(name: &str) -> io::Result<&str> {
@@ -603,6 +505,69 @@ pub fn rename(path: &Path, new_name: &str) -> io::Result<PathBuf> {
     }
     fs::rename(path, &target)?;
     Ok(target)
+}
+
+/// Renames many items at once (batch rename). Every new name is checked
+/// before anything moves: no clashes with each other (ignoring case, as APFS
+/// does) or with other files. Items go to temporary names first, so swaps
+/// like a → b, b → a work; if any step fails, everything is put back.
+pub fn rename_many(renames: &[(PathBuf, String)]) -> io::Result<()> {
+    use std::collections::HashSet;
+
+    let sources: HashSet<(PathBuf, String)> = renames
+        .iter()
+        .filter_map(|(src, _)| Some((src.parent()?.to_path_buf(), file_name(src).ok()?.to_lowercase())))
+        .collect();
+    let mut taken = HashSet::new();
+    let mut plan = Vec::new();
+    for (src, new_name) in renames {
+        let new_name = validate_name(new_name)?;
+        let parent = src
+            .parent()
+            .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Can't rename the root folder"))?;
+        let key = (parent.to_path_buf(), new_name.to_lowercase());
+        if !taken.insert(key.clone()) {
+            return Err(io::Error::new(
+                ErrorKind::AlreadyExists,
+                format!("Two items would both be called \"{new_name}\""),
+            ));
+        }
+        // A name already used by something outside this batch.
+        if exists(&parent.join(new_name)) && !sources.contains(&key) {
+            return Err(io::Error::new(ErrorKind::AlreadyExists, format!("\"{new_name}\" already exists")));
+        }
+        if file_name(src)? != new_name {
+            plan.push((src.clone(), parent.join(new_name)));
+        }
+    }
+
+    // Step 1: everything to a temporary name beside it.
+    let mut staged: Vec<(PathBuf, PathBuf, PathBuf)> = Vec::new();
+    let undo = |staged: &[(PathBuf, PathBuf, PathBuf)]| {
+        for (src, tmp, _) in staged.iter().rev() {
+            let _ = fs::rename(tmp, src);
+        }
+    };
+    for (i, (src, target)) in plan.into_iter().enumerate() {
+        let tmp = src.with_file_name(format!(".patina-rename-{}-{i}", std::process::id()));
+        if let Err(e) = fs::rename(&src, &tmp) {
+            undo(&staged);
+            return Err(e);
+        }
+        staged.push((src, tmp, target));
+    }
+    // Step 2: temporary names to the new ones.
+    for i in 0..staged.len() {
+        let (_, tmp, target) = &staged[i];
+        if let Err(e) = fs::rename(tmp, target) {
+            for (src, _, target) in &staged[..i] {
+                let _ = fs::rename(target, src);
+            }
+            undo(&staged[i..]);
+            return Err(e);
+        }
+    }
+    Ok(())
 }
 
 pub fn create_folder(dir: &Path, name: &str) -> io::Result<PathBuf> {
@@ -638,29 +603,6 @@ mod tests {
         assert_eq!(unique_target(&dir, "a.txt", false), dir.join("a copy 2.txt"));
         assert_eq!(unique_target(&dir, "b.txt", false), dir.join("b.txt"));
         fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn copy_and_move_folders() {
-        let root = temp_dir("ops");
-        let (left, right) = (root.join("left"), root.join("right"));
-        fs::create_dir_all(left.join("folder/inner")).unwrap();
-        fs::write(left.join("folder/inner/x.txt"), "hello").unwrap();
-        fs::create_dir(&right).unwrap();
-
-        copy_into(&[left.join("folder")], &right).unwrap();
-        assert_eq!(fs::read_to_string(right.join("folder/inner/x.txt")).unwrap(), "hello");
-
-        // Copying again into the same place makes a "copy", it doesn't merge.
-        copy_into(&[left.join("folder")], &right).unwrap();
-        assert!(right.join("folder copy/inner/x.txt").exists());
-
-        move_into(&[left.join("folder")], &right).unwrap();
-        assert!(!left.join("folder").exists());
-        assert!(right.join("folder copy 2/inner/x.txt").exists());
-
-        assert!(copy_into(&[right.join("folder")], &right.join("folder/inner")).is_err());
-        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -772,44 +714,55 @@ mod tests {
     }
 
     #[test]
-    fn transfer_auto_moves_within_a_disk() {
-        let root = temp_dir("transfer");
-        let (a, b) = (root.join("a"), root.join("b"));
-        fs::create_dir_all(&a).unwrap();
-        fs::create_dir_all(&b).unwrap();
-        fs::write(a.join("one.txt"), "1").unwrap();
-        fs::write(a.join("two.txt"), "2").unwrap();
-
-        // Same disk: Auto moves.
-        transfer(&[a.join("one.txt")], &b, Transfer::Auto).unwrap();
-        assert!(!a.join("one.txt").exists() && b.join("one.txt").exists());
-        // Copy keeps the original; Move removes it.
-        transfer(&[a.join("two.txt")], &b, Transfer::Copy).unwrap();
-        assert!(a.join("two.txt").exists() && b.join("two.txt").exists());
-        transfer(&[a.join("two.txt")], &b, Transfer::Move).unwrap();
-        assert!(!a.join("two.txt").exists() && b.join("two copy.txt").exists());
-
-        assert_eq!(Transfer::parse("copy"), Transfer::Copy);
-        assert_eq!(Transfer::parse("anything"), Transfer::Auto);
-        fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn duplicate_makes_a_copy_alongside() {
-        let dir = temp_dir("duplicate");
-        fs::write(dir.join("report.pdf"), "x").unwrap();
-        fs::create_dir(dir.join("folder")).unwrap();
-        duplicate(&[dir.join("report.pdf"), dir.join("folder")]).unwrap();
-        assert!(dir.join("report copy.pdf").exists());
-        assert!(dir.join("folder copy").is_dir());
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
     fn listing_reports_its_disk() {
         let dir = temp_dir("device");
         let listing = list_dir(&dir, false, SortBy::Name, false).unwrap();
         assert_eq!(listing.device, Some(fs::metadata(&dir).unwrap().dev()));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rename_many_renames_and_swaps() {
+        let dir = temp_dir("batch");
+        for (name, body) in [("a.txt", "A"), ("b.txt", "B"), ("c.txt", "C")] {
+            fs::write(dir.join(name), body).unwrap();
+        }
+        // a and b swap; c becomes "Photo 3".
+        rename_many(&[
+            (dir.join("a.txt"), "b.txt".into()),
+            (dir.join("b.txt"), "a.txt".into()),
+            (dir.join("c.txt"), "Photo 3.txt".into()),
+        ])
+        .unwrap();
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "B");
+        assert_eq!(fs::read_to_string(dir.join("b.txt")).unwrap(), "A");
+        assert_eq!(fs::read_to_string(dir.join("Photo 3.txt")).unwrap(), "C");
+        // No temporary names left behind.
+        assert!(fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with(".patina")));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rename_many_refuses_clashes_without_touching_anything() {
+        let dir = temp_dir("batch-clash");
+        for name in ["a.txt", "b.txt", "keep.txt"] {
+            fs::write(dir.join(name), name).unwrap();
+        }
+        let before = |d: &Path| {
+            let mut v: Vec<_> = fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name()).collect();
+            v.sort();
+            v
+        };
+        let original = before(&dir);
+
+        // Two items given the same name (differing only in case).
+        let err = rename_many(&[(dir.join("a.txt"), "same.txt".into()), (dir.join("b.txt"), "SAME.txt".into())]);
+        assert!(err.is_err());
+        // A name that belongs to a file outside the batch.
+        assert!(rename_many(&[(dir.join("a.txt"), "keep.txt".into())]).is_err());
+        // An invalid name.
+        assert!(rename_many(&[(dir.join("a.txt"), "x/y".into())]).is_err());
+        assert_eq!(before(&dir), original);
         fs::remove_dir_all(&dir).unwrap();
     }
 
