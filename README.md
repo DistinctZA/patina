@@ -4,224 +4,168 @@
 
 # Patina
 
-### A fast, keyboard-first dual-pane file manager for macOS.
-
-**Two panes. Zero lag. No sandbox. Built in Rust.**
+**A free, open-source dual-pane file manager for Mac.**<br />
+A fast, keyboard-friendly Finder alternative, built with Rust.
 
 <p>
-  <img alt="Version" src="https://img.shields.io/badge/version-0.5.1-36373c?style=flat-square" />
-  <img alt="Rust" src="https://img.shields.io/badge/Rust-1.85+-b7410e?style=flat-square&logo=rust&logoColor=white" />
-  <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white" />
-  <img alt="Svelte 5" src="https://img.shields.io/badge/Svelte-5-ff3e00?style=flat-square&logo=svelte&logoColor=white" />
-  <img alt="macOS 13+" src="https://img.shields.io/badge/macOS-13+-000000?style=flat-square&logo=apple&logoColor=white" />
-  <img alt="Signed" src="https://img.shields.io/badge/signed-Developer%20ID-f2a33a?style=flat-square" />
+  <a href="https://github.com/DistinctZA/patina/releases/latest"><img alt="Latest version" src="https://img.shields.io/badge/version-0.5.1-36373c?style=flat-square" /></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square" /></a>
+  <img alt="macOS 13 or later" src="https://img.shields.io/badge/macOS-13+-000000?style=flat-square&logo=apple&logoColor=white" />
+  <img alt="Built with Rust" src="https://img.shields.io/badge/built_with-Rust-b7410e?style=flat-square&logo=rust&logoColor=white" />
 </p>
 
 <p>
-  <a href="#-features"><b>Features</b></a> ·
-  <a href="#%EF%B8%8F-keyboard-shortcuts"><b>Shortcuts</b></a> ·
-  <a href="#-quick-start"><b>Quick start</b></a> ·
-  <a href="#-install-on-your-mac"><b>Install</b></a> ·
-  <a href="#%EF%B8%8F-versions-and-releases"><b>Releases</b></a> ·
-  <a href="#-how-it-works"><b>How it works</b></a> ·
-  <a href="#-roadmap"><b>Roadmap</b></a>
+  <a href="https://github.com/DistinctZA/patina/releases/latest"><b>Download for Mac</b></a> ·
+  <a href="#features">Features</a> ·
+  <a href="#keyboard-shortcuts">Shortcuts</a> ·
+  <a href="#faq">FAQ</a> ·
+  <a href="#build-from-source">Build from source</a>
 </p>
 
-```bash
-npm install && npm run tauri dev
-```
-
-<br />
-
-<img src="docs/screenshot-icons.png" width="900" alt="Patina with this project in List view and the Mac's apps in Icons view, previewing Calculator" />
-
-<sub><b>List + Icons</b>: file-type icons on the left, real app icons on the right, and the preview panel.</sub>
-
-<br /><br />
-
-<img src="docs/screenshot-panes.png" width="900" alt="Patina with two panes in List view showing the home folder, with the preview panel on the right" />
-
-<sub><b>Two panes</b>: your folders side by side in List view, each with its own icon, and the preview panel.</sub>
+<img src="docs/screenshot-panes.png" width="900" alt="Patina, a dual-pane file manager for macOS, showing two folders side by side with a preview panel on the right" />
 
 </div>
 
-> [!NOTE]
-> Patina runs outside the Mac App Store, so it isn't sandboxed and can browse your whole disk. No microphone, accessibility or screen-recording permissions are ever needed.
+Patina shows two folders side by side, so moving and copying files takes one step instead of juggling Finder windows. It works the way your Mac does, with drag and drop, copy and paste, and Move to Bin, and adds what Finder is missing: two panes, a preview panel, batch rename, copy progress with a Cancel button, and a keyboard shortcut for everything.
 
----
+## Download
 
-## ✨ Features
+1. Download the `.dmg` from the [latest release](https://github.com/DistinctZA/patina/releases/latest).
+2. Open it and drag **Patina** into **Applications**.
+3. The first time you open Patina, macOS may say it can't check the app. Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. You only need to do this once.
 
-| | |
-|---|---|
-| 🪟 **Dual panes** | Two folders side by side. <kbd>Tab</kbd> flips between them. |
-| ⚡ **Instant, even when huge** | Only visible rows are drawn, so 50,000-file folders scroll smoothly. |
-| 🖱️ **Drag and drop** | Drag between panes, onto any folder, breadcrumb or sidebar item, in from Finder, or out to Finder and other apps. Moves on the same disk and copies to another, like Finder; hold ⌥ to copy or ⌘ to move. Hold over a folder to spring it open; lists scroll at their edges. |
-| ⬚ **Drag to select** | Drag a box across empty space to select; ⌘ or ⇧ adds to the selection. |
-| 📋 **Copy & paste with Finder** | ⌘C / ⌘V share the system clipboard with Finder, ⌥⌘V moves, ⌘D duplicates. Clashes become `name copy`, never overwritten. |
-| ✏️ **Batch rename** | Select several items and press F2: replace text (or a regular expression), add text, number them ("Holiday 001"), or change case, with a live preview that flags clashes before anything is renamed. |
-| 📊 **Copy progress** | Long copies and moves show progress, time left and a Cancel button; cancelling never leaves half-copied files. Same-disk copies stay instant (APFS clones). |
-| 🖱️ **Right-click menus** | Open, Copy, Paste, Duplicate, Rename, Add to Favourites, Copy Path, Move to Bin, and view options. |
-| 🍏 **APFS clones** | Copies on the same disk are instant and take no extra space. |
-| 🔄 **Live refresh** | Panes update by themselves when files change on disk (FSEvents). |
-| 🔤 **Natural sorting** | `file 2` before `file 10`; sort by name, size or date, folders first. |
-| ⌨️ **Type to jump** | Start typing a name and the cursor jumps to it. |
-| 🗑️ **Move to Bin** | Deletes go to the Bin, never straight to oblivion. |
-| 🗂️ **Sidebar** | Drives with free space, Favourites, Recents and Finder tags. Drag folders in to add Favourites, drag to reorder, fold sections, or right-click to choose which ones show. |
-| 🪟 **Four views** | Icons (Quick Look thumbnails and real app icons), List, Columns and Gallery, per pane. |
-| 🎨 **File-type icons** | The Material Icon Theme: a distinct icon for 1,300+ file types and named folders. |
-| 👁️ **Preview panel** | Images, video, audio, text and code, plus an Info section where you choose which details to show. |
-| 🔎 **Search** | Filter the current folder as you type. |
-| 🌑 **Slate dark theme** | Soft greys, an inset sidebar with purple icons, and orange accents. |
+Patina runs on Macs with Apple silicon (M1 or later) and macOS 13 Ventura or later. On an Intel Mac, [build it from source](#build-from-source).
 
-## ⌨️ Keyboard shortcuts
+> [!TIP]
+> macOS asks for permission the first time you open Desktop, Documents, Downloads or an external drive. To skip those prompts, add Patina under **System Settings → Privacy & Security → Full Disk Access**.
+
+## Features
+
+- **Two panes side by side.** Press <kbd>Tab</kbd> to switch between them, <kbd>F5</kbd> to copy to the other pane and <kbd>F6</kbd> to move.
+- **Drag and drop everywhere.** Between panes, onto folders, the sidebar or the path at the top, in from Finder and out to other apps. Hold a file over a folder to open it.
+- **Copy and paste with Finder.** Copy files in one app and paste them in the other.
+- **Four views.** Icons, List, Columns and Gallery, chosen separately for each pane.
+- **Preview panel.** Images, video, audio, text and code, plus details such as size and dates.
+- **Batch rename.** Rename many files at once: find and replace, add text, number them or change case, with a live preview.
+- **Copy progress.** See how long a big copy will take, and cancel it safely at any time.
+- **Fast with huge folders.** Even a folder of 50,000 files scrolls smoothly.
+- **Sidebar.** Drives, Favourites, Recent folders and Finder tags. Drag folders in to add them.
+- **Icons for 1,300+ file types**, so you can tell files apart at a glance.
+- **Safe by default.** Deleted files go to the Bin, and nothing is ever overwritten: a clash becomes "name copy".
+- **Private.** Everything stays on your Mac. No account, no ads, no tracking.
+
+<div align="center">
+<img src="docs/screenshot-icons.png" width="900" alt="Patina showing a project folder in List view and the Mac's apps in Icons view, previewing Calculator" />
+<br />
+<sub>List view on the left, Icons view on the right, and the preview panel.</sub>
+</div>
+
+## Keyboard shortcuts
 
 | Action | Keys |
 |---|---|
 | Switch pane | <kbd>Tab</kbd> |
-| Move cursor / extend selection | <kbd>↑</kbd> <kbd>↓</kbd> / <kbd>⇧</kbd><kbd>↑</kbd> <kbd>⇧</kbd><kbd>↓</kbd> |
-| Open file or folder | <kbd>Return</kbd> or <kbd>⌘</kbd><kbd>↓</kbd> |
-| Enclosing folder | <kbd>⌫</kbd> or <kbd>⌘</kbd><kbd>↑</kbd> |
+| Open | <kbd>Return</kbd> or <kbd>⌘</kbd><kbd>↓</kbd> |
+| Go to the enclosing folder | <kbd>⌫</kbd> or <kbd>⌘</kbd><kbd>↑</kbd> |
 | Back / forward | <kbd>⌘</kbd><kbd>[</kbd> / <kbd>⌘</kbd><kbd>]</kbd> |
-| Copy to other pane | <kbd>F5</kbd> |
-| Move to other pane | <kbd>F6</kbd> |
-| Rename (several selected: Batch Rename) | <kbd>F2</kbd> |
-| New folder | <kbd>F7</kbd> or <kbd>⌘</kbd><kbd>⇧</kbd><kbd>N</kbd> |
-| Move to Bin | <kbd>F8</kbd> or <kbd>⌘</kbd><kbd>⌫</kbd> |
-| Show / hide hidden files | <kbd>⌘</kbd><kbd>⇧</kbd><kbd>.</kbd> |
-| Reveal in Finder | <kbd>⌘</kbd><kbd>⌥</kbd><kbd>R</kbd> |
-| Refresh | <kbd>⌘</kbd><kbd>R</kbd> |
-| Select all / clear | <kbd>⌘</kbd><kbd>A</kbd> / <kbd>Esc</kbd> |
-| Copy / paste files (shared with Finder) | <kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌘</kbd><kbd>V</kbd> |
+| Go to folder | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd> |
+| Copy / move to the other pane | <kbd>F5</kbd> / <kbd>F6</kbd> |
+| Copy / paste files | <kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌘</kbd><kbd>V</kbd> |
 | Move copied files here | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>V</kbd> |
 | Duplicate | <kbd>⌘</kbd><kbd>D</kbd> |
-| Go to folder | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd> |
-| While dragging: copy / move | hold <kbd>⌥</kbd> / <kbd>⌘</kbd> |
-| Icons / List / Columns / Gallery | <kbd>⌘</kbd><kbd>1</kbd> / <kbd>⌘</kbd><kbd>2</kbd> / <kbd>⌘</kbd><kbd>3</kbd> / <kbd>⌘</kbd><kbd>4</kbd> |
-| Columns: open folder / go back | <kbd>→</kbd> / <kbd>←</kbd> |
+| Rename (several files: batch rename) | <kbd>F2</kbd> |
+| New folder | <kbd>F7</kbd> or <kbd>⇧</kbd><kbd>⌘</kbd><kbd>N</kbd> |
+| Move to Bin | <kbd>F8</kbd> or <kbd>⌘</kbd><kbd>⌫</kbd> |
+| Select all / clear selection | <kbd>⌘</kbd><kbd>A</kbd> / <kbd>Esc</kbd> |
 | Search this folder | <kbd>⌘</kbd><kbd>F</kbd> |
-| Show / hide preview | <kbd>⌘</kbd><kbd>⇧</kbd><kbd>P</kbd> |
-| Show / hide sidebar | <kbd>⌃</kbd><kbd>⌘</kbd><kbd>S</kbd> |
+| Icons / List / Columns / Gallery | <kbd>⌘</kbd><kbd>1</kbd> to <kbd>⌘</kbd><kbd>4</kbd> |
+| Show hidden files | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>.</kbd> |
+| Show in Finder | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>R</kbd> |
+| Refresh | <kbd>⌘</kbd><kbd>R</kbd> |
+| Show or hide the preview / sidebar | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>P</kbd> / <kbd>⌃</kbd><kbd>⌘</kbd><kbd>S</kbd> |
+| While dragging: copy / move | hold <kbd>⌥</kbd> / <kbd>⌘</kbd> |
 
-> [!TIP]
-> On a MacBook keyboard, hold <kbd>fn</kbd> for the F-keys.
+Start typing a name to jump to it. On a MacBook, hold <kbd>fn</kbd> for the F-keys.
 
-## 🚀 Quick start
+## FAQ
 
-You need [Rust](https://rustup.rs) and [Node.js](https://nodejs.org).
+**Is Patina free?**<br />
+Yes. Patina is free and open source under the [MIT License](LICENSE).
+
+**How is it different from Finder?**<br />
+Finder shows one folder per window. Patina shows two side by side, so you can see where files are going. It also adds batch rename, copy progress you can cancel, a preview panel and shortcuts for every action.
+
+**Is it like Total Commander or ForkLift?**<br />
+Yes. Patina is a two-pane file manager in the same tradition, made for macOS.
+
+**Why does macOS warn me the first time I open it?**<br />
+Patina is signed by its developer but isn't notarized by Apple yet, so macOS asks you to confirm once. See step 3 under [Download](#download).
+
+**Does Patina collect any data?**<br />
+No. It works entirely on your Mac and never connects to the internet.
+
+**Is there a Windows or Linux version?**<br />
+Not yet. Patina is Mac-only for now.
+
+## Build from source
+
+You need [Rust](https://rustup.rs), [Node.js](https://nodejs.org) 20.19 or later, and Apple's command line tools (`xcode-select --install`).
 
 ```bash
-git clone git@github.com:DistinctZA/patina.git
+git clone https://github.com/DistinctZA/patina.git
 cd patina
 npm install
 npm run tauri dev
 ```
 
-Run the Rust tests for the file operations:
+To build the app:
 
 ```bash
+APPLE_SIGNING_IDENTITY=- npm run tauri build -- --bundles app
+```
+
+The app is saved to `src-tauri/target/release/bundle/macos/Patina.app`; drag it into Applications. `APPLE_SIGNING_IDENTITY=-` signs it for your own Mac. Leave it out if you have an Apple Developer ID and have put its name in `src-tauri/tauri.conf.json`.
+
+To run the checks and tests:
+
+```bash
+npm run check
 cd src-tauri && cargo test
 ```
 
-The file-type icons are copied from the `material-icon-theme` package by `npm run icons`, which runs automatically before `dev`, `build` and `check`.
-
-## 📦 Install on your Mac
-
-Download the latest `.dmg` from **[Releases](https://github.com/DistinctZA/patina/releases)**, open it, and drag Patina into **Applications**.
-
-Or build it yourself:
-
-```bash
-npm run tauri build -- --bundles app
-```
-
-and drag `src-tauri/target/release/bundle/macos/Patina.app` into **Applications**. Builds are signed with the Developer ID certificate named in `src-tauri/tauri.conf.json`, so they open without Gatekeeper warnings on this Mac.
-
-> [!IMPORTANT]
-> macOS asks once per protected folder (Desktop, Documents, Downloads, external drives). To skip those prompts entirely, add Patina under **System Settings → Privacy & Security → Full Disk Access**. Every build is signed with the same certificate, so the permission survives rebuilds.
-
 <details>
-<summary><b>Sharing Patina with other Macs (notarization)</b></summary>
+<summary><b>How Patina is built</b></summary>
 
 <br />
 
-A copy downloaded on another Mac must also be **notarized**, or Gatekeeper blocks it. Tauri notarizes during the build when these are set:
+Patina is a [Tauri 2](https://tauri.app) app. The file operations are written in Rust and the interface in [Svelte 5](https://svelte.dev) and TypeScript. Folder listings, copies and moves run on background threads, so the window never freezes.
 
-```bash
-export APPLE_ID="you@example.com"
-export APPLE_PASSWORD="app-specific-password"   # create at appleid.apple.com
-export APPLE_TEAM_ID="Z8DX5X3H4R"
-npm run tauri build -- --bundles app,dmg
-```
+| Folder or file | What's in it |
+|---|---|
+| `src-tauri/src/fs_ops.rs` | Listing, sorting, renaming and new folders |
+| `src-tauri/src/transfer.rs` | Copy and move, with progress and Cancel |
+| `src-tauri/src/thumbs.rs` | Thumbnails and app icons, with a disk cache |
+| `src-tauri/src/pasteboard.rs` | Files on the clipboard, shared with Finder |
+| `src-tauri/src/lib.rs` | The commands the interface calls, and the folder watcher |
+| `src/routes/+page.svelte` | The window: toolbar, panes, shortcuts and dialogs |
+| `src/lib/Pane.svelte`, `pane-state.svelte.ts` | One pane and its folder, selection and history |
+| `src/lib/drag.svelte.ts` | Drag and drop |
+| `src/lib/Sidebar.svelte`, `Preview.svelte` | The sidebar and the preview panel |
+| `scripts/release.mjs` | Builds, signs and publishes a release |
 
 </details>
 
-## 🏷️ Versions and releases
+## Contributing
 
-Patina uses [semantic versioning](https://semver.org): **MAJOR.MINOR.PATCH**. New features bump the minor number (0.3.0 → 0.4.0) and fixes bump the patch number (0.4.0 → 0.4.1). Every push to GitHub is a release:
+Bug reports, ideas and pull requests are welcome. For bigger changes, please [open an issue](https://github.com/DistinctZA/patina/issues) first so we can talk it through. Release notes are made from commit messages, so write them for a reader: a short subject, then what changed.
 
-```bash
-npm run release -- minor            # or: patch, major
-npm run release -- minor --dry-run  # preview the version and notes
-```
+## Roadmap
 
-The script bumps the version everywhere it appears, runs the checks and tests, builds the signed app and a signed `.dmg`, then commits, tags `vX.Y.Z`, pushes, and publishes a [GitHub Release](https://github.com/DistinctZA/patina/releases) with the `.dmg` and notes from the commits since the last release.
-
-## 🧠 How it works
-
-```
-┌───────────────────────────── Svelte 5 UI ─────────────────────────────┐
-│   Left pane  ◄── Tab ──►  Right pane      virtual list · keyboard     │
-└───────────────┬───────────────────────────────────────▲───────────────┘
-                │ invoke (list_dir, copy_into, …)       │ dir-changed events
-┌───────────────▼────────────────── Rust core ──────────┴───────────────┐
-│   fs_ops.rs: list · sort · copy · move · rename   notify (FSEvents)   │
-│   runs on blocking threads, so the window never freezes               │
-└───────────────────────────────────────────────────────────────────────┘
-```
-
-| Path | What lives there |
-|---|---|
-| `src-tauri/src/fs_ops.rs` | Listing, natural sort, copy, move, rename, with tests |
-| `src-tauri/src/lib.rs` | Tauri commands and the folder watcher |
-| `src/lib/pane-state.svelte.ts` | One pane's folder, cursor, selection and history |
-| `src-tauri/src/thumbs.rs` | Quick Look thumbnails and app icons, with a disk cache |
-| `src/lib/Pane.svelte` | A pane: list and icon views (virtualized), or columns and gallery |
-| `src/lib/ColumnView.svelte`, `GalleryView.svelte` | The Columns and Gallery views |
-| `src/lib/material.ts`, `scripts/material-icons.mjs` | Material Icon Theme lookup and its generator |
-| `src/lib/drag.svelte.ts` | Drag and drop within the window |
-| `src/lib/ContextMenu.svelte` | Right-click menus |
-| `src-tauri/src/pasteboard.rs` | Files on the system clipboard, shared with Finder |
-| `src-tauri/src/transfer.rs` | Copy and move with progress and cancel |
-| `src/lib/BatchRename.svelte`, `batch-rename.ts` | Batch Rename dialog and its naming rules |
-| `src/lib/TransferPanel.svelte`, `transfers.svelte.ts` | Progress panel for copies and moves |
-| `src/lib/Sidebar.svelte` | Drives, favourites (drag to add or reorder) and tags |
-| `src/lib/Preview.svelte` | Preview and the customisable Info section |
-| `src/routes/+page.svelte` | Layout, toolbar, search, shortcuts and dialogs |
-| `scripts/release.mjs` | Version bump, signed build and `.dmg`, tag and GitHub Release |
-
-## 🗺️ Roadmap
-
-- [x] Dual-pane browsing, copy, move, rename, new folder, Bin
-- [x] Live refresh, natural sort, hidden files, type-to-jump
-- [x] Signed, unsandboxed macOS build
-- [x] Sidebar with drives, favourites and tags
-- [x] Icon view, preview panel, search
-- [x] Columns and Gallery views, Material file-type icons
-- [x] Drag folders into Favourites; collapsible sidebar sections
-- [x] Recents, and a right-click menu to show or hide sidebar sections
-- [x] Batch rename
-- [x] Drag and drop between panes, onto folders and the sidebar, and in from Finder
-- [x] Copy and paste files with Finder, duplicate, right-click menus, Go to Folder
-- [x] Drag out to Finder and other apps, spring-loaded folders, drag to select
-- [x] Copy progress, with Cancel
 - [ ] Tabs in each pane
-- [ ] Quick Open (fuzzy search across folders)
-- [ ] Folder compare & sync
-- [ ] Full-screen Quick Look (<kbd>Space</kbd>)
+- [ ] Quick Open: find any folder by typing part of its name
+- [ ] Compare and sync two folders
+- [ ] Full-screen Quick Look with <kbd>Space</kbd>
 
----
+## License
 
-<div align="center">
-  <sub>Made with 🦀 Rust. File icons from <a href="https://github.com/material-extensions/vscode-material-icon-theme">Material Icon Theme</a> (MIT).</sub>
-</div>
+Patina is released under the [MIT License](LICENSE). File-type icons come from [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme), also MIT.

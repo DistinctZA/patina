@@ -1,7 +1,7 @@
 {
   "name": "patina",
   "version": "0.5.1",
-  "description": "A fast dual-pane file manager for macOS",
+  "description": "A free, open-source dual-pane file manager for macOS",
   "type": "module",
   "scripts": {
     "icons": "node scripts/material-icons.mjs",
@@ -17,6 +17,7 @@
     "release": "node scripts/release.mjs"
   },
   "license": "MIT",
+  "repository": "github:DistinctZA/patina",
   "dependencies": {
     "@lucide/svelte": "^1.61.0",
     "@tauri-apps/api": "^2",

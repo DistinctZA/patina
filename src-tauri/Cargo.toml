@@ -1,8 +1,10 @@
 [package]
 name = "patina"
 version = "0.5.1"
-description = "A fast dual-pane file manager for macOS"
+description = "A free, open-source dual-pane file manager for macOS"
 authors = ["Rick Wagner"]
+license = "MIT"
+repository = "https://github.com/DistinctZA/patina"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
