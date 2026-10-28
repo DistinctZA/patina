@@ -793,6 +793,7 @@
         sidebarWidth = saved.sidebarWidth ?? SIDEBAR_WIDTH;
         previewWidth = saved.previewWidth ?? null;
         split = saved.split ?? 0.5;
+        toolbar = tidyToolbar(saved.toolbar);
       })
       .catch(() => {})
       .finally(() => {
@@ -817,6 +818,137 @@
   });
 
   const hasTargets = $derived(active.selected.size > 0 || !!active.current);
+
+  // ── Toolbar ───────────────────────────────────────────────────────────
+  // The buttons right of the title, in the user's order: drag one sideways
+  // to move it. "|" starts a new group.
+
+  type Tool = { title: string; icon: typeof RefreshCw; size?: number; on?: boolean; off?: boolean; action: () => void };
+
+  const DEFAULT_TOOLBAR = [
+    ...VIEWS.map((v) => v.view),
+    "|",
+    "sidebar",
+    "preview",
+    "hidden",
+    "|",
+    "refresh",
+    "copy",
+    "move",
+    "new-folder",
+    "rename",
+    "trash",
+  ];
+
+  const tools: Record<string, Tool> = $derived({
+    ...Object.fromEntries(
+      VIEWS.map((v) => [
+        v.view,
+        { title: `${v.label} (${v.key})`, icon: VIEW_ICONS[v.view], on: active.view === v.view, action: () => (active.view = v.view) },
+      ]),
+    ),
+    sidebar: { title: "Sidebar (⌃⌘S)", icon: PanelLeft, on: showSidebar, action: () => (showSidebar = !showSidebar) },
+    preview: { title: "Preview (⌘⇧P)", icon: PanelRight, on: showPreview, action: () => (showPreview = !showPreview) },
+    hidden: {
+      title: "Hidden files (⌘⇧.)",
+      icon: active.showHidden ? Eye : EyeOff,
+      on: active.showHidden,
+      action: () => run(() => active.toggleHidden()),
+    },
+    refresh: { title: "Refresh (⌘R)", icon: RefreshCw, size: 15, action: () => run(refreshBoth) },
+    copy: { title: "Copy to other pane (F5)", icon: Copy, off: busy || !hasTargets, action: () => transfer("copy") },
+    move: { title: "Move to other pane (F6)", icon: FolderInput, off: busy || !hasTargets, action: () => transfer("move") },
+    "new-folder": { title: "New folder (F7)", icon: FolderPlus, off: busy, action: newFolder },
+    rename: { title: "Rename (F2)", icon: PencilLine, off: busy || !active.current, action: rename },
+    trash: { title: "Move to Bin (⌘⌫)", icon: Trash, off: busy || !hasTargets, action: trash },
+  });
+
+  /** Known buttons only, any missing (new in an update) added at the end, and no empty groups. */
+  function tidyToolbar(order: string[] | undefined): string[] {
+    const known = DEFAULT_TOOLBAR.filter((t) => t !== "|");
+    const out: string[] = [];
+    for (const t of order ?? DEFAULT_TOOLBAR) {
+      if (t === "|" ? out.length > 0 && out.at(-1) !== "|" : known.includes(t) && !out.includes(t)) out.push(t);
+    }
+    for (const t of known) if (!out.includes(t)) out.push(t);
+    while (out.at(-1) === "|") out.pop();
+    return out;
+  }
+
+  let toolbar = $state(tidyToolbar(undefined));
+  let toolsEl = $state<HTMLElement>();
+  /** The button being dragged, if any. */
+  let toolDrag = $state<string | null>(null);
+  const toolGroups = $derived(toolbar.join(" ").split(" | ").map((g) => g.split(" ").filter(Boolean)));
+
+  /** Dragging a button sideways moves it; a plain click still clicks it. */
+  function startToolDrag(e: MouseEvent, id: string) {
+    if (e.button !== 0 || !toolsEl) return;
+    const before = toolbar;
+    // Where everything sits now. The new place is worked out against this,
+    // so buttons don't jitter as they shift to make room.
+    const groups = [...toolsEl.querySelectorAll<HTMLElement>(".group")].map((g) => g.getBoundingClientRect());
+    let g = 0;
+    const centres = before.map((t) => {
+      if (t === "|") return (groups[g].right + groups[++g].left) / 2;
+      const box = toolsEl!.querySelector(`[data-tool="${t}"]`)!.getBoundingClientRect();
+      return (box.left + box.right) / 2;
+    });
+    const rest = before.filter((t) => t !== id);
+    const restCentres = centres.filter((_, i) => before[i] !== id);
+
+    const move = (ev: MouseEvent) => {
+      if (!toolDrag) {
+        if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 5) return;
+        toolDrag = id;
+        document.body.classList.add("moving-tool");
+      }
+      const at = restCentres.filter((x) => x < ev.clientX).length;
+      toolbar = [...rest.slice(0, at), id, ...rest.slice(at)];
+    };
+    const finish = (keep: boolean) => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      window.removeEventListener("keydown", key, true);
+      if (!toolDrag) return;
+      toolDrag = null;
+      document.body.classList.remove("moving-tool");
+      toolbar = keep ? tidyToolbar(toolbar) : before;
+      if (keep) saveSettings({ ...settings, toolbar });
+      // The release would otherwise click whatever button is under it.
+      const swallow = (ev: Event) => ev.stopPropagation();
+      window.addEventListener("click", swallow, { capture: true, once: true });
+      setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+    };
+    const up = () => finish(true);
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape" || !toolDrag) return;
+      ev.stopPropagation();
+      finish(false);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    window.addEventListener("keydown", key, true);
+  }
+
+  function toolbarMenu(e: MouseEvent) {
+    e.preventDefault();
+    menu = {
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { heading: "Drag buttons to move them" },
+        {
+          label: "Reset Toolbar",
+          disabled: settings.toolbar == null,
+          action: () => {
+            toolbar = tidyToolbar(undefined);
+            saveSettings({ ...settings, toolbar: undefined });
+          },
+        },
+      ],
+    };
+  }
 </script>
 
 <!-- The webview's own menu (Reload, Inspect…) isn't useful here; text keeps it
@@ -876,38 +1008,30 @@
 
       <span class="flex" data-tauri-drag-region></span>
 
-      <div class="group">
-        {#each VIEWS as v (v.view)}
-          {@const Icon = VIEW_ICONS[v.view]}
-          <button class:on={active.view === v.view} onclick={() => (active.view = v.view)} title="{v.label} ({v.key})">
-            <Icon size={16} />
-          </button>
+      <div class="tools" bind:this={toolsEl} role="toolbar" tabindex="-1" oncontextmenu={toolbarMenu}>
+        {#each toolGroups as group, g (g)}
+          {#if group.length}
+            <div class="group">
+              {#each group as id (id)}
+                {@const t = tools[id]}
+                {@const Icon = t.icon}
+                <!-- Dimmed rather than disabled, so it can still be dragged. -->
+                <button
+                  data-tool={id}
+                  class:on={t.on}
+                  class:off={t.off}
+                  class:lifted={toolDrag === id}
+                  aria-disabled={t.off}
+                  title={t.title}
+                  onmousedown={(e) => startToolDrag(e, id)}
+                  onclick={() => !t.off && t.action()}
+                >
+                  <Icon size={t.size ?? 16} />
+                </button>
+              {/each}
+            </div>
+          {/if}
         {/each}
-      </div>
-
-      <div class="group">
-        <button class:on={showSidebar} onclick={() => (showSidebar = !showSidebar)} title="Sidebar (⌃⌘S)">
-          <PanelLeft size={16} />
-        </button>
-        <button class:on={showPreview} onclick={() => (showPreview = !showPreview)} title="Preview (⌘⇧P)">
-          <PanelRight size={16} />
-        </button>
-        <button class:on={active.showHidden} onclick={() => run(() => active.toggleHidden())} title="Hidden files (⌘⇧.)">
-          {#if active.showHidden}<Eye size={16} />{:else}<EyeOff size={16} />{/if}
-        </button>
-      </div>
-
-      <div class="group">
-        <button onclick={() => run(refreshBoth)} title="Refresh (⌘R)"><RefreshCw size={15} /></button>
-        <button onclick={() => transfer("copy")} disabled={busy || !hasTargets} title="Copy to other pane (F5)">
-          <Copy size={16} />
-        </button>
-        <button onclick={() => transfer("move")} disabled={busy || !hasTargets} title="Move to other pane (F6)">
-          <FolderInput size={16} />
-        </button>
-        <button onclick={newFolder} disabled={busy} title="New folder (F7)"><FolderPlus size={16} /></button>
-        <button onclick={rename} disabled={busy || !active.current} title="Rename (F2)"><PencilLine size={16} /></button>
-        <button onclick={trash} disabled={busy || !hasTargets} title="Move to Bin (⌘⌫)"><Trash size={16} /></button>
       </div>
 
       <label class="search">
@@ -1177,8 +1301,29 @@
     background: var(--button-on);
     color: var(--text);
   }
-  .group button:disabled {
+  .group button:disabled,
+  .group button.off {
     opacity: 0.35;
+  }
+  .group button.off:hover {
+    background: none;
+    color: var(--muted);
+  }
+  .tools {
+    flex: none;
+    display: flex;
+    gap: 8px;
+  }
+  /* The button being moved, and the cursor while it is. */
+  .group button.lifted {
+    background: var(--button-on);
+    color: var(--text);
+    opacity: 1;
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  :global(body.moving-tool),
+  :global(body.moving-tool *) {
+    cursor: grabbing !important;
   }
 
   .search {

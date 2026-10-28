@@ -72,6 +72,8 @@ export type Settings = {
   previewWidth?: number;
   /** The left pane's share of the room for both panes (0 to 1). */
   split?: number;
+  /** Toolbar buttons in the user's order; "|" starts a new group. */
+  toolbar?: string[];
 };
 
 export const api = {
