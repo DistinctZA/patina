@@ -2,6 +2,7 @@
   // The version, at the foot of the sidebar; click it to check for, and
   // install, a new version.
   import { CircleArrowUp, LoaderCircle } from "@lucide/svelte";
+  import { plainNotes } from "./release-notes";
   import { transfers } from "./transfers.svelte";
   import { updates } from "./updates.svelte";
 
@@ -21,16 +22,7 @@
   const percent = $derived(
     status.kind === "downloading" && status.total ? Math.min(100, Math.round((status.done / status.total) * 100)) : null,
   );
-  const notes = $derived(status.kind === "available" ? tidy(status.update.body ?? "") : "");
-
-  /** Release notes are Markdown; show them as plain text, without the install footer. */
-  function tidy(md: string) {
-    return md
-      .replace(/\n-{3,}[\s\S]*$/, "")
-      .replace(/^#+\s*/gm, "")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
-  }
+  const notes = $derived(status.kind === "available" ? plainNotes(status.update.body ?? "") : "");
 
   function toggle() {
     open = !open;

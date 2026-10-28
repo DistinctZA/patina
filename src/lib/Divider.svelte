@@ -26,14 +26,21 @@
     e.stopPropagation();
     dragging = true;
     document.body.classList.add("resizing");
-    const move = (ev: MouseEvent) => onmove(ev.clientX);
-    const up = (ev: MouseEvent) => {
-      // The last move can be skipped when the pointer moves fast.
+    // A click, or the first half of a double-click, leaves the size alone.
+    let moved = false;
+    const move = (ev: MouseEvent) => {
+      if (!moved && Math.abs(ev.clientX - e.clientX) < 2) return;
+      moved = true;
       onmove(ev.clientX);
+    };
+    const up = (ev: MouseEvent) => {
       dragging = false;
       document.body.classList.remove("resizing");
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
+      if (!moved) return;
+      // The last move can be skipped when the pointer moves fast.
+      onmove(ev.clientX);
       ondone();
     };
     window.addEventListener("mousemove", move);
