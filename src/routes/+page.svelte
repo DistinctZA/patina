@@ -44,6 +44,7 @@
   import Preview from "$lib/Preview.svelte";
   import FileIcon from "$lib/FileIcon.svelte";
   import Sidebar from "$lib/Sidebar.svelte";
+  import Divider from "$lib/Divider.svelte";
 
   const left = new PaneState("left");
   const right = new PaneState("right");
@@ -58,6 +59,23 @@
   let settings = $state<Settings>({});
   /** False until saved settings are read, so nothing overwrites them on startup. */
   let settingsReady = $state(false);
+  // Panel sizes, dragged with the dividers and saved when a drag ends. Until
+  // it's dragged, the preview keeps sizing itself to the window.
+  const SIDEBAR_WIDTH = 210;
+  let sidebarWidth = $state(SIDEBAR_WIDTH);
+  let previewWidth = $state<number | null>(null);
+  let split = $state(0.5);
+  let bodyEl = $state<HTMLElement>();
+  let panesEl = $state<HTMLElement>();
+  // Capped by the window too, so a smaller window never squeezes the panes out.
+  const sidebarCss = $derived(`min(${sidebarWidth}px, 30vw)`);
+  const previewCss = $derived(previewWidth ? `min(${previewWidth}px, 50vw)` : "clamp(280px, 24vw, 440px)");
+  const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+  function saveSizes() {
+    saveSettings({ ...settings, sidebarWidth, previewWidth: previewWidth ?? undefined, split });
+  }
+
   // Look for new versions at launch and twice a day, unless switched off.
   // A derived, so other settings changes (Recents, on every folder) don't
   // restart the schedule.
@@ -141,18 +159,35 @@
   const itemsLabel = (entries: Entry[]) => (entries.length === 1 ? `“${entries[0].name}”` : `${entries.length} items`);
 
   /** Puts files on the system clipboard, so they paste in Finder too. */
-  function copyToClipboard(entries = active.targets()) {
+  /**
+   * Files cut with ⌘X. They go on the clipboard like a copy, and the next
+   * paste moves them, as long as the clipboard still holds exactly them.
+   */
+  let cut: Set<string> | null = null;
+
+  function copyToClipboard(entries = active.targets(), asCut = false) {
     if (!entries.length) return;
-    run(() => api.clipboardCopy(entries.map((e) => e.path)).then(() => showNote(`Copied ${itemsLabel(entries)}`)));
+    const paths = entries.map((e) => e.path);
+    run(() =>
+      api.clipboardCopy(paths).then(() => {
+        cut = asCut ? new Set(paths) : null;
+        showNote(asCut ? `Cut ${itemsLabel(entries)}: paste to move` : `Copied ${itemsLabel(entries)}`);
+      }),
+    );
   }
 
-  /** Pastes files copied here or in Finder into the active pane; ⌥ moves them. */
+  /** Pastes files copied here or in Finder into the active pane; ⌥, or a cut, moves them. */
   function paste(move = false) {
     const pane = active;
     if (!pane.isFolder) return showError("Open a folder to paste into.");
     api
       .clipboardPaste()
-      .then((paths) => (paths.length ? moveOrCopy(paths, pane.path, move ? "move" : "copy") : showNote("Nothing to paste")))
+      .then((paths) => {
+        if (!paths.length) return showNote("Nothing to paste");
+        const wasCut = cut != null && cut.size === paths.length && paths.every((p) => cut!.has(p));
+        if (wasCut) cut = null;
+        return moveOrCopy(paths, pane.path, move || wasCut ? "move" : "copy");
+      })
       .catch(showError);
   }
 
@@ -162,10 +197,13 @@
     transfers.run("Duplicating", (id) => api.duplicate(id, paths)).then(refreshBoth, jobFailed);
   }
 
-  function copyPaths(entries: Entry[]) {
-    navigator.clipboard
-      .writeText(entries.map((e) => e.path).join("\n"))
-      .then(() => showNote(entries.length === 1 ? "Copied path" : `Copied ${entries.length} paths`))
+  /** Copy Path: one path per line, as text, through the Mac's own clipboard. */
+  function copyPaths(paths: string[]) {
+    if (!paths.length) return;
+    cut = null;
+    api
+      .clipboardCopyText(paths.join("\n"))
+      .then(() => showNote(paths.length === 1 ? "Copied path" : `Copied ${paths.length} paths`))
       .catch(showError);
   }
 
@@ -402,6 +440,17 @@
           return true;
         case e.key === "a" && cmd:
           pane.selectAll();
+          return true;
+        // ⌥⌘C, as in Finder: the selection's paths, or this folder's.
+        case e.code === "KeyC" && cmd && e.altKey && !e.shiftKey: {
+          const targets = pane.targets();
+          copyPaths(targets.length ? targets.map((t) => t.path) : pane.isFolder ? [pane.path] : []);
+          return true;
+        }
+        case e.code === "KeyX" && cmd && !e.shiftKey && !e.altKey:
+          // Cutting text in a field keeps working.
+          if (window.getSelection()?.toString()) return false;
+          copyToClipboard(pane.targets(), true);
           return true;
         // ⌘C/⌘V use the physical key: ⌥ changes e.key ("√" for ⌥V).
         case e.code === "KeyC" && cmd && !e.shiftKey && !e.altKey:
@@ -652,6 +701,7 @@
       { label: "Open", shortcut: "⌘↓", action: openAll },
       { label: "Show in Finder", shortcut: "⌥⌘R", action: () => run(() => api.revealInFinder(targets[0].path)) },
       "separator",
+      { label: one ? "Cut" : `Cut ${targets.length} Items`, shortcut: "⌘X", action: () => copyToClipboard(targets, true) },
       { label: one ? "Copy" : `Copy ${targets.length} Items`, shortcut: "⌘C", action: () => copyToClipboard(targets) },
       { label: "Paste", shortcut: "⌘V", disabled: !pane.isFolder, action: () => paste() },
       { label: "Duplicate", shortcut: "⌘D", action: duplicate },
@@ -661,7 +711,7 @@
       "separator",
       { label: one ? "Rename…" : `Rename ${targets.length} Items…`, shortcut: "F2", action: rename },
       { label: "Add to Favourites", disabled: !folders.length, action: () => addFavorites(folders.map((f) => f.path), null) },
-      { label: one ? "Copy Path" : "Copy Paths", action: () => copyPaths(targets) },
+      { label: one ? "Copy Path" : "Copy Paths", shortcut: "⌥⌘C", action: () => copyPaths(targets.map((t) => t.path)) },
       "separator",
       { label: "Move to Bin", shortcut: "⌘⌫", danger: true, action: trash },
     ];
@@ -672,6 +722,7 @@
     return [
       { label: "New Folder", shortcut: "⇧⌘N", disabled: !pane.isFolder, action: newFolder },
       { label: "Paste", shortcut: "⌘V", disabled: !pane.isFolder, action: () => paste() },
+      { label: "Copy Folder Path", disabled: !pane.isFolder, action: () => copyPaths([pane.path]) },
       "separator",
       { heading: "View" },
       ...VIEWS.map((v) => ({
@@ -737,7 +788,12 @@
 
     api
       .readSettings()
-      .then((saved) => (settings = saved))
+      .then((saved) => {
+        settings = saved;
+        sidebarWidth = saved.sidebarWidth ?? SIDEBAR_WIDTH;
+        previewWidth = saved.previewWidth ?? null;
+        split = saved.split ?? 0.5;
+      })
       .catch(() => {})
       .finally(() => {
         settingsReady = true;
@@ -776,6 +832,7 @@
 <div
   class="app"
   class:no-sidebar={!showSidebar}
+  style:grid-template-columns={showSidebar ? `${sidebarCss} minmax(0, 1fr)` : undefined}
   role="presentation"
   onmousedown={appMouseDown}
 >
@@ -795,6 +852,13 @@
       onclearrecents={() => saveSettings({ ...settings, recents: [] })}
       autoCheck={autoUpdate}
       onautocheck={(on) => saveSettings({ ...settings, autoUpdate: on })}
+    />
+    <Divider
+      left={sidebarCss}
+      label="Resize the sidebar"
+      onmove={(x) => (sidebarWidth = clamp(Math.round(x), 160, 400))}
+      ondone={saveSizes}
+      onreset={() => ((sidebarWidth = SIDEBAR_WIDTH), saveSizes())}
     />
   {/if}
 
@@ -863,8 +927,13 @@
       </label>
     </header>
 
-    <div class="body" class:with-preview={showPreview}>
-      <div class="panes">
+    <div
+      class="body"
+      class:with-preview={showPreview}
+      style:grid-template-columns={showPreview ? `minmax(0, 1fr) ${previewCss}` : undefined}
+      bind:this={bodyEl}
+    >
+      <div class="panes" style:grid-template-columns="{split * 1000}fr {(1 - split) * 1000}fr" bind:this={panesEl}>
         <Pane
           pane={left}
           {home}
@@ -879,8 +948,29 @@
           onactivate={() => (activeId = "right")}
           oncontext={(e, i) => openMenu(right, e, i)}
         />
+        <Divider
+          left="{split * 100}%"
+          label="Resize the panes"
+          onmove={(x) => {
+            const box = panesEl!.getBoundingClientRect();
+            const min = Math.min(0.45, 220 / box.width);
+            split = clamp((x - box.left) / box.width, min, 1 - min);
+          }}
+          ondone={saveSizes}
+          onreset={() => ((split = 0.5), saveSizes())}
+        />
       </div>
       {#if showPreview}
+        <Divider
+          left="calc(100% - {previewCss})"
+          label="Resize the preview"
+          onmove={(x) => {
+            const box = bodyEl!.getBoundingClientRect();
+            previewWidth = clamp(Math.round(box.right - x), 240, Math.max(240, Math.min(800, box.width - 440)));
+          }}
+          ondone={saveSizes}
+          onreset={() => ((previewWidth = null), saveSizes())}
+        />
         <Preview
           entry={active.current}
           fields={settings.previewFields}
@@ -1020,6 +1110,7 @@
   }
 
   .app {
+    position: relative;
     display: grid;
     grid-template-columns: 210px minmax(0, 1fr);
     height: 100vh;
@@ -1126,6 +1217,7 @@
   }
 
   .body {
+    position: relative;
     flex: 1;
     min-height: 0;
     display: grid;
@@ -1136,6 +1228,7 @@
     grid-template-columns: minmax(0, 1fr) clamp(280px, 24vw, 440px);
   }
   .panes {
+    position: relative;
     min-height: 0;
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -1176,6 +1269,18 @@
     font-size: 11px;
     font-weight: 600;
   }
+  /* While a divider is dragged: its cursor everywhere, and nothing else reacts. */
+  :global(body.resizing),
+  :global(body.resizing *) {
+    cursor: col-resize !important;
+    -webkit-user-select: none !important;
+    user-select: none !important;
+  }
+  :global(body.resizing iframe),
+  :global(body.resizing video) {
+    pointer-events: none;
+  }
+
   :global(body.dragging),
   :global(body.dragging *) {
     cursor: grabbing !important;

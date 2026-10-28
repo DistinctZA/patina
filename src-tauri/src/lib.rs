@@ -221,6 +221,16 @@ fn clipboard_copy(paths: Vec<String>) -> Result<(), String> {
     }
 }
 
+/// Copy Path: the paths as plain text, one per line.
+#[tauri::command]
+fn clipboard_copy_text(text: String) -> Result<(), String> {
+    if pasteboard::copy_text(&text) {
+        Ok(())
+    } else {
+        Err("Couldn't put the path on the clipboard".into())
+    }
+}
+
 #[tauri::command]
 fn clipboard_paste() -> Vec<String> {
     pasteboard::pasted_files()
@@ -367,6 +377,7 @@ pub fn run() {
             transfer,
             duplicate,
             clipboard_copy,
+            clipboard_copy_text,
             clipboard_paste,
             drag_out,
             cancel_transfer,

@@ -67,6 +67,11 @@ export type Settings = {
   recents?: string[];
   /** Look for new versions at launch and twice a day; on unless false. */
   autoUpdate?: boolean;
+  /** Panel sizes set with the dividers; absent means the usual size. */
+  sidebarWidth?: number;
+  previewWidth?: number;
+  /** The left pane's share of the room for both panes (0 to 1). */
+  split?: number;
 };
 
 export const api = {
@@ -91,6 +96,8 @@ export const api = {
   /** The system clipboard, shared with Finder. */
   clipboardCopy: (paths: string[]) => invoke<void>("clipboard_copy", { paths }),
   clipboardPaste: () => invoke<string[]>("clipboard_paste"),
+  /** Plain text on the clipboard, for Copy Path. */
+  clipboardCopyText: (text: string) => invoke<void>("clipboard_copy_text", { text }),
   /** Hands a drag over to macOS, for dropping into Finder or other apps. */
   dragOut: (paths: string[], moveFiles: boolean) => invoke<void>("drag_out", { paths, moveFiles }),
   rename: (path: string, newName: string) => invoke<string>("rename", { path, newName }),

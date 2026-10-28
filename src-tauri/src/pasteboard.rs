@@ -1,11 +1,12 @@
 //! Files on the system clipboard, in the same form Finder uses, so ⌘C in
-//! Finder and ⌘V in Patina work (and the other way round).
+//! Finder and ⌘V in Patina work (and the other way round). Also plain text,
+//! for Copy Path.
 
 #[cfg(target_os = "macos")]
 mod mac {
     use objc2::rc::Retained;
     use objc2::runtime::ProtocolObject;
-    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardWriting};
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeString, NSPasteboardWriting};
     use objc2_foundation::{NSArray, NSString, NSURL};
 
     pub fn write(pb: &NSPasteboard, paths: &[String]) -> bool {
@@ -33,6 +34,16 @@ mod mac {
             .collect()
     }
 
+    pub fn write_text(pb: &NSPasteboard, text: &str) -> bool {
+        pb.clearContents();
+        pb.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString })
+    }
+
+    #[cfg(test)]
+    pub fn read_text(pb: &NSPasteboard) -> Option<String> {
+        pb.stringForType(unsafe { NSPasteboardTypeString }).map(|s| s.to_string())
+    }
+
     pub fn general() -> Retained<NSPasteboard> {
         NSPasteboard::generalPasteboard()
     }
@@ -50,6 +61,12 @@ pub fn pasted_files() -> Vec<String> {
     mac::read(&mac::general())
 }
 
+/// Puts plain text on the clipboard, replacing what was there.
+#[cfg(target_os = "macos")]
+pub fn copy_text(text: &str) -> bool {
+    mac::write_text(&mac::general(), text)
+}
+
 #[cfg(not(target_os = "macos"))]
 pub fn copy_files(_paths: &[String]) -> bool {
     false
@@ -58,6 +75,11 @@ pub fn copy_files(_paths: &[String]) -> bool {
 #[cfg(not(target_os = "macos"))]
 pub fn pasted_files() -> Vec<String> {
     Vec::new()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn copy_text(_text: &str) -> bool {
+    false
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -74,5 +96,16 @@ mod tests {
         assert_eq!(mac::read(&pb), paths);
         assert!(mac::write(&pb, &["/tmp".to_string()]));
         assert_eq!(mac::read(&pb), ["/tmp"]);
+    }
+
+    #[test]
+    fn text_replaces_files_on_a_pasteboard() {
+        let pb = NSPasteboard::pasteboardWithUniqueName();
+        assert!(mac::write(&pb, &["/tmp".to_string()]));
+        let paths = "/Users/me/one file.txt\n/Applications";
+        assert!(mac::write_text(&pb, paths));
+        assert_eq!(mac::read_text(&pb).as_deref(), Some(paths));
+        // Text isn't a file, so pasting files finds none.
+        assert!(mac::read(&pb).is_empty());
     }
 }

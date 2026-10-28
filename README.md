@@ -45,7 +45,8 @@ After that, Patina keeps itself up to date: when a new version is out, click **U
 
 - **Two panes side by side.** Press <kbd>Tab</kbd> to switch between them, <kbd>F5</kbd> to copy to the other pane and <kbd>F6</kbd> to move.
 - **Drag and drop everywhere.** Between panes, onto folders, the sidebar or the path at the top, in from Finder and out to other apps. Hold a file over a folder to open it.
-- **Copy and paste with Finder.** Copy files in one app and paste them in the other.
+- **Copy and paste with Finder.** Copy files in one app and paste them in the other, or cut and paste to move them.
+- **Resizable panels.** Drag the lines between the sidebar, the two panes and the preview; double-click one to reset it.
 - **Four views.** Icons, List, Columns and Gallery, chosen separately for each pane.
 - **Preview panel.** Images, video, audio, text and code, plus details such as size and dates.
 - **Batch rename.** Rename many files at once: find and replace, add text, number them or change case, with a live preview.
@@ -73,7 +74,8 @@ After that, Patina keeps itself up to date: when a new version is out, click **U
 | Back / forward | <kbd>⌘</kbd><kbd>[</kbd> / <kbd>⌘</kbd><kbd>]</kbd> |
 | Go to folder | <kbd>⇧</kbd><kbd>⌘</kbd><kbd>G</kbd> |
 | Copy / move to the other pane | <kbd>F5</kbd> / <kbd>F6</kbd> |
-| Copy / paste files | <kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌘</kbd><kbd>V</kbd> |
+| Cut / copy / paste files | <kbd>⌘</kbd><kbd>X</kbd> / <kbd>⌘</kbd><kbd>C</kbd> / <kbd>⌘</kbd><kbd>V</kbd> |
+| Copy path | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>C</kbd> |
 | Move copied files here | <kbd>⌥</kbd><kbd>⌘</kbd><kbd>V</kbd> |
 | Duplicate | <kbd>⌘</kbd><kbd>D</kbd> |
 | Rename (several files: batch rename) | <kbd>F2</kbd> |

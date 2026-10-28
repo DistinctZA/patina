@@ -41,6 +41,7 @@
     type TextPreview,
   } from "./api";
   import FileIcon from "./FileIcon.svelte";
+  import MediaPlayer from "./MediaPlayer.svelte";
 
   let {
     entry,
@@ -180,12 +181,11 @@
       {#if media === "image" && !imageFailed}
         <img class="media" src={fileUrl(entry.path)} alt={entry.name} onerror={imageError} draggable="false" />
       {:else if media === "video"}
-        <!-- svelte-ignore a11y_media_has_caption -->
-        <video class="media" src={fileUrl(entry.path)} controls preload="metadata"></video>
+        <MediaPlayer src={fileUrl(entry.path)} kind="video" />
       {:else if media === "audio"}
         <div class="audio">
           <FileIcon {entry} size={96} thumbnail />
-          <audio src={fileUrl(entry.path)} controls preload="metadata"></audio>
+          <MediaPlayer src={fileUrl(entry.path)} kind="audio" />
         </div>
       {:else if text}
         <pre class="text">{text.text}{text.truncated ? "\n…" : ""}</pre>
@@ -290,9 +290,6 @@
     justify-items: center;
     gap: 14px;
     width: 90%;
-  }
-  .audio audio {
-    width: 100%;
   }
   .text {
     align-self: stretch;
