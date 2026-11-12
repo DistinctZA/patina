@@ -4,7 +4,7 @@
 //! near-instant. Big files going to another disk are copied in chunks, so the
 //! progress bar moves and Cancel works part-way through a file.
 
-use crate::fs_ops::{check_not_into_itself, file_name, unique_target};
+use crate::fs_ops::{StagingDir, check_not_into_itself, file_name, rename_exclusive, unique_target};
 use serde::Serialize;
 use std::fs;
 use std::io::{self, ErrorKind, Read, Write};
@@ -158,31 +158,29 @@ fn run(plan: Vec<(PathBuf, PathBuf, Action)>, t: &mut Ticker) -> io::Result<()> 
     for (src, dest_dir, action) in plan {
         t.check()?;
         check_not_into_itself(&src, &dest_dir)?;
-        let is_dir = fs::symlink_metadata(&src)?.is_dir();
-        let target = unique_target(&dest_dir, &file_name(&src)?, is_dir);
         let dest_dev = fs::metadata(&dest_dir)?.dev();
         match action {
             Action::Rename => {
                 t.working_on("Moving", &src);
-                match fs::rename(&src, &target) {
-                    Ok(()) => t.add(0, 1)?,
+                match publish(&src, &dest_dir, &file_name(&src)?) {
+                    Ok(_) => t.add(0, 1)?,
                     // A different volume after all (e.g. a mount point): copy instead.
                     Err(e) if e.kind() == ErrorKind::CrossesDevices => {
                         let (bytes, items) = measure(&src, t.cancel)?;
                         t.state.total_bytes += bytes;
                         t.state.total_items += items.saturating_sub(1);
-                        copy_then_delete(&src, &target, dest_dev, t)?;
+                        copy_then_delete(&src, &dest_dir, dest_dev, t)?;
                     }
                     Err(e) => return Err(e),
                 }
             }
             Action::Copy => {
                 t.working_on("Copying", &src);
-                copy_cleanly(&src, &target, dest_dev, t)?;
+                copy_cleanly(&src, &dest_dir, dest_dev, t)?;
             }
             Action::CopyThenDelete => {
                 t.working_on("Moving", &src);
-                copy_then_delete(&src, &target, dest_dev, t)?;
+                copy_then_delete(&src, &dest_dir, dest_dev, t)?;
             }
         }
     }
@@ -190,8 +188,21 @@ fn run(plan: Vec<(PathBuf, PathBuf, Action)>, t: &mut Ticker) -> io::Result<()> 
     Ok(())
 }
 
-fn copy_then_delete(src: &Path, target: &Path, dest_dev: u64, t: &mut Ticker) -> io::Result<()> {
-    copy_cleanly(src, target, dest_dev, t)?;
+/// Claim a free name atomically, retrying when another job got there first.
+fn publish(src: &Path, dest_dir: &Path, name: &str) -> io::Result<PathBuf> {
+    let is_dir = fs::symlink_metadata(src)?.is_dir();
+    loop {
+        let target = unique_target(dest_dir, name, is_dir);
+        match rename_exclusive(src, &target) {
+            Ok(()) => return Ok(target),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn copy_then_delete(src: &Path, dest_dir: &Path, dest_dev: u64, t: &mut Ticker) -> io::Result<()> {
+    copy_cleanly(src, dest_dir, dest_dev, t)?;
     if fs::symlink_metadata(src)?.is_dir() {
         fs::remove_dir_all(src)
     } else {
@@ -199,18 +210,37 @@ fn copy_then_delete(src: &Path, target: &Path, dest_dev: u64, t: &mut Ticker) ->
     }
 }
 
-/// Copies an item; if that fails or is cancelled part-way, removes the
-/// half-made copy so no partial files are left behind.
-fn copy_cleanly(src: &Path, target: &Path, dest_dev: u64, t: &mut Ticker) -> io::Result<()> {
-    let result = copy_tree(src, target, dest_dev, t);
+/// Build the copy in a private directory, then publish it atomically. Failure
+/// cleanup can only touch this job's partial copy, never another job's files.
+fn copy_cleanly(src: &Path, dest_dir: &Path, dest_dev: u64, t: &mut Ticker) -> io::Result<()> {
+    let staging = StagingDir::new(dest_dir)?;
+    let partial = staging.path.join("item");
+    let result = (|| {
+        copy_tree(src, &partial, dest_dev, t)?;
+        t.check()?;
+        publish(&partial, dest_dir, &file_name(src)?)?;
+        Ok(())
+    })();
     if result.is_err() {
-        let _ = match fs::symlink_metadata(target) {
-            Ok(m) if m.is_dir() => fs::remove_dir_all(target),
-            Ok(_) => fs::remove_file(target),
-            Err(_) => Ok(()),
-        };
+        let _ = remove_partial(&partial);
     }
     result
+}
+
+fn remove_partial(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = fs::symlink_metadata(path)?;
+    if meta.is_dir() {
+        // Completed subdirectories may already have read-only permissions.
+        // This is only called inside a private copy staging directory.
+        fs::set_permissions(path, fs::Permissions::from_mode(meta.permissions().mode() | 0o700))?;
+        for child in fs::read_dir(path)? {
+            remove_partial(&child?.path())?;
+        }
+        fs::remove_dir(path)
+    } else {
+        fs::remove_file(path)
+    }
 }
 
 /// Total bytes and item count (files, folders, links) under a path. Counting
@@ -248,7 +278,9 @@ fn copy_tree(src: &Path, dest: &Path, dest_dev: u64, t: &mut Ticker) -> io::Resu
             let item = item?;
             copy_tree(&item.path(), &dest.join(item.file_name()), dest_dev, t)?;
         }
-        Ok(())
+        // Apply metadata after the children, so copying still works for
+        // read-only folders and doesn't change the preserved modification date.
+        copy_directory_metadata(src, dest)
     } else {
         t.working_on(t.state.verb, src);
         if meta.dev() != dest_dev && meta.len() >= CHUNKED_MIN {
@@ -260,6 +292,32 @@ fn copy_tree(src: &Path, dest: &Path, dest_dev: u64, t: &mut Ticker) -> io::Resu
         }
         t.add(0, 1)
     }
+}
+
+#[cfg(target_os = "macos")]
+fn copy_directory_metadata(src: &Path, dest: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let src = CString::new(src.as_os_str().as_bytes())?;
+    let dest = CString::new(dest.as_os_str().as_bytes())?;
+    // Includes Finder tags, ACLs, permissions and dates, without copying data.
+    let result = unsafe {
+        libc::copyfile(src.as_ptr(), dest.as_ptr(), std::ptr::null_mut(), libc::COPYFILE_METADATA | libc::COPYFILE_NOFOLLOW)
+    };
+    if result == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn copy_directory_metadata(src: &Path, dest: &Path) -> io::Result<()> {
+    let meta = fs::metadata(src)?;
+    for name in xattr::list(src)? {
+        if let Some(value) = xattr::get(src, &name)? {
+            xattr::set(dest, &name, &value)?;
+        }
+    }
+    let times = fs::FileTimes::new().set_modified(meta.modified()?).set_accessed(meta.accessed()?);
+    fs::File::open(dest)?.set_times(times)?;
+    fs::set_permissions(dest, meta.permissions())
 }
 
 /// Copies a big file piece by piece, reporting as it goes and stopping
@@ -432,5 +490,101 @@ mod tests {
         assert_eq!(xattr::get(root.join("copy.bin"), "com.example.patina-test").unwrap().as_deref(), Some(&b"tag"[..]));
         assert_eq!(t.progress().done_bytes, data.len() as u64);
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_transfers_preserve_every_source() {
+        use std::collections::HashSet;
+        use std::sync::Barrier;
+        for mode in [Mode::Copy, Mode::Move] {
+            let root = temp_dir(&format!("concurrent-{mode:?}"));
+            let dest = root.join("dest");
+            fs::create_dir(&dest).unwrap();
+            let barrier = Barrier::new(16);
+            let sources: Vec<_> = (0..16).map(|i| {
+                let dir = root.join(format!("source-{i}"));
+                fs::create_dir(&dir).unwrap();
+                let file = dir.join("report.txt");
+                fs::write(&file, format!("contents-{i}")).unwrap();
+                file
+            }).collect();
+            std::thread::scope(|scope| {
+                for src in &sources {
+                    let dest = &dest;
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        let cancel = AtomicBool::new(false);
+                        let mut ticker = Ticker::new(&cancel, |p| {
+                            // Release every job just before destination allocation.
+                            if p.current.is_empty() { barrier.wait(); }
+                        });
+                        transfer(&[src.clone()], dest, mode, &mut ticker).unwrap();
+                    });
+                }
+            });
+            let actual: HashSet<_> = fs::read_dir(&dest).unwrap()
+                .map(|e| fs::read_to_string(e.unwrap().path()).unwrap()).collect();
+            let expected: HashSet<_> = (0..16).map(|i| format!("contents-{i}")).collect();
+            assert_eq!(actual, expected);
+            assert!(sources.iter().all(|p| p.exists() == (mode == Mode::Copy)));
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn cancelling_a_copy_never_removes_another_jobs_destination() {
+        let root = temp_dir("cancel-collision");
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src/a"), "A").unwrap();
+        fs::create_dir(root.join("dest")).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut ticker = Ticker::new(&cancel, |p| {
+            if p.done_items == 2 {
+                fs::create_dir(root.join("dest/src")).unwrap();
+                fs::write(root.join("dest/src/keep"), "another job").unwrap();
+                cancel.store(true, Ordering::Relaxed);
+            }
+        });
+        ticker.every = Duration::ZERO;
+        let err = transfer(&[root.join("src")], &root.join("dest"), Mode::Copy, &mut ticker).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Interrupted);
+        assert_eq!(fs::read_to_string(root.join("dest/src/keep")).unwrap(), "another job");
+        assert_eq!(fs::read_dir(root.join("dest")).unwrap().count(), 1);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn copied_and_moved_directories_keep_metadata() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::UNIX_EPOCH;
+        let root = temp_dir("directory-metadata");
+        let src = root.join("private");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("child"), "contents").unwrap();
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o700)).unwrap();
+        let modified = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        fs::File::open(&src).unwrap().set_times(fs::FileTimes::new().set_modified(modified)).unwrap();
+        let mut tags = Vec::new();
+        plist::to_writer_binary(&mut tags, &vec!["Work\n4"]).unwrap();
+        xattr::set(&src, "com.apple.metadata:_kMDItemUserTags", &tags).unwrap();
+        for moving in [false, true] {
+            let dest = root.join(if moving { "moved" } else { "copied" });
+            fs::create_dir(&dest).unwrap();
+            let device = fs::metadata(&dest).unwrap().dev();
+            if moving {
+                // Exercise the cross-volume move path without needing a mounted disk.
+                quiet(|t| copy_then_delete(&src, &dest, device, t)).unwrap();
+                assert!(!src.exists());
+            } else {
+                quiet(|t| transfer(&[src.clone()], &dest, Mode::Copy, t)).unwrap();
+            }
+            let copy = dest.join("private");
+            assert_eq!(fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o700);
+            assert_eq!(fs::metadata(&copy).unwrap().modified().unwrap(), modified);
+            assert_eq!(xattr::get(&copy, "com.apple.metadata:_kMDItemUserTags").unwrap(), Some(tags.clone()));
+            assert_eq!(fs::read_to_string(copy.join("child")).unwrap(), "contents");
+            assert_eq!(fs::read_dir(&dest).unwrap().count(), 1);
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }

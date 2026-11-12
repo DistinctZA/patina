@@ -7,7 +7,7 @@ use std::ffi::{CStr, CString};
 use std::fs;
 use std::io::{self, ErrorKind, Read};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -462,6 +462,52 @@ pub fn unique_target(dir: &Path, name: &str, is_dir: bool) -> PathBuf {
         .expect("unbounded range always finds a free name")
 }
 
+/// Atomically refuses an occupied destination, including a broken symlink.
+/// A separate exists/rename pair can overwrite another job's files.
+pub(crate) fn rename_exclusive(src: &Path, dest: &Path) -> io::Result<()> {
+    let src = CString::new(src.as_os_str().as_bytes())?;
+    let dest = CString::new(dest.as_os_str().as_bytes())?;
+    #[cfg(target_os = "macos")]
+    let result = unsafe { libc::renamex_np(src.as_ptr(), dest.as_ptr(), libc::RENAME_EXCL) };
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        libc::renameat2(libc::AT_FDCWD, src.as_ptr(), libc::AT_FDCWD, dest.as_ptr(), libc::RENAME_NOREPLACE)
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    return Err(io::Error::new(ErrorKind::Unsupported, "This system doesn't support safe renames"));
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    if result == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
+/// A private directory on the same volume as the items being worked on.
+/// Only empty directories are removed on drop: a failed rename rollback
+/// must leave its originals available for recovery.
+pub(crate) struct StagingDir {
+    pub path: PathBuf,
+}
+
+impl StagingDir {
+    pub fn new(parent: &Path) -> io::Result<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        loop {
+            let id = NEXT.fetch_add(1, Ordering::Relaxed);
+            let path = parent.join(format!(".patina-stage-{}-{id}", std::process::id()));
+            match fs::DirBuilder::new().mode(0o700).create(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+impl Drop for StagingDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.path);
+    }
+}
+
 /// Like `Path::exists`, but also true for broken symlinks.
 fn exists(p: &Path) -> bool {
     fs::symlink_metadata(p).is_ok()
@@ -488,7 +534,7 @@ pub(crate) fn check_not_into_itself(src: &Path, dest_dir: &Path) -> io::Result<(
 
 fn validate_name(name: &str) -> io::Result<&str> {
     let name = name.trim();
-    if name.is_empty() || name == "." || name == ".." || name.contains('/') {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\0']) {
         return Err(io::Error::new(ErrorKind::InvalidInput, "That name isn't allowed"));
     }
     Ok(name)
@@ -500,22 +546,52 @@ pub fn rename(path: &Path, new_name: &str) -> io::Result<PathBuf> {
         .parent()
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Can't rename the root folder"))?;
     let target = parent.join(new_name);
-    // Allow changing only the capitalisation (same file on a case-insensitive disk).
-    let same_file = fs::canonicalize(&target).ok() == fs::canonicalize(path).ok();
-    if exists(&target) && !same_file {
-        return Err(io::Error::new(
-            ErrorKind::AlreadyExists,
-            format!("\"{new_name}\" already exists"),
-        ));
-    }
-    fs::rename(path, &target)?;
+    // Staging also permits case-only changes without following symlinks or
+    // ever replacing another directory entry.
+    rename_many(&[(path.to_path_buf(), new_name.to_string())])?;
     Ok(target)
+}
+
+struct StagedRename {
+    src: PathBuf,
+    target: PathBuf,
+    staging: StagingDir,
+    committed: bool,
+}
+
+impl StagedRename {
+    fn temporary(&self) -> PathBuf {
+        self.staging.path.join("item")
+    }
+}
+
+fn rollback_renames(staged: &mut [StagedRename], error: io::Error) -> io::Error {
+    let mut recovery = Vec::new();
+    // Undo the entire commit phase first. Restoring a swap directly to its
+    // original names would overwrite the next item waiting to be restored.
+    for item in staged.iter_mut().filter(|s| s.committed) {
+        match rename_exclusive(&item.target, &item.temporary()) {
+            Ok(()) => item.committed = false,
+            Err(e) => recovery.push(format!("{}: {e}", item.target.display())),
+        }
+    }
+    for item in staged.iter().rev().filter(|s| !s.committed) {
+        if let Err(e) = rename_exclusive(&item.temporary(), &item.src) {
+            recovery.push(format!("{}: {e}", item.temporary().display()));
+        }
+    }
+    if recovery.is_empty() {
+        error
+    } else {
+        io::Error::new(error.kind(), format!("{error}. Some items couldn't be restored; recover them from: {}", recovery.join("; ")))
+    }
 }
 
 /// Renames many items at once (batch rename). Every new name is checked
 /// before anything moves: no clashes with each other (ignoring case, as APFS
 /// does) or with other files. Items go to temporary names first, so swaps
-/// like a → b, b → a work; if any step fails, everything is put back.
+/// like a → b, b → a work. Failures restore the originals; if another process
+/// prevents restoration, the error identifies where they have been kept.
 pub fn rename_many(renames: &[(PathBuf, String)]) -> io::Result<()> {
     use std::collections::HashSet;
 
@@ -526,6 +602,7 @@ pub fn rename_many(renames: &[(PathBuf, String)]) -> io::Result<()> {
     let mut taken = HashSet::new();
     let mut plan = Vec::new();
     for (src, new_name) in renames {
+        fs::symlink_metadata(src)?;
         let new_name = validate_name(new_name)?;
         let parent = src
             .parent()
@@ -546,31 +623,33 @@ pub fn rename_many(renames: &[(PathBuf, String)]) -> io::Result<()> {
         }
     }
 
-    // Step 1: everything to a temporary name beside it.
-    let mut staged: Vec<(PathBuf, PathBuf, PathBuf)> = Vec::new();
-    let undo = |staged: &[(PathBuf, PathBuf, PathBuf)]| {
-        for (src, tmp, _) in staged.iter().rev() {
-            let _ = fs::rename(tmp, src);
+    // A parent rename would also move a child's staging location. Refuse
+    // overlapping selections (possible in tag results) before moving either.
+    let paths: HashSet<&Path> = plan.iter().map(|(src, _)| src.as_path()).collect();
+    if plan.iter().any(|(src, _)| src.ancestors().skip(1).any(|p| paths.contains(p))) {
+        return Err(io::Error::new(ErrorKind::InvalidInput, "Rename a folder and its contents separately"));
+    }
+
+    // Step 1: reserve each private staging directory before moving its item.
+    let mut staged: Vec<StagedRename> = Vec::new();
+    for (src, target) in plan {
+        let staging = match StagingDir::new(src.parent().unwrap()) {
+            Ok(dir) => dir,
+            Err(e) => return Err(rollback_renames(&mut staged, e)),
+        };
+        let item = StagedRename { src, target, staging, committed: false };
+        if let Err(e) = rename_exclusive(&item.src, &item.temporary()) {
+            return Err(rollback_renames(&mut staged, e));
         }
-    };
-    for (i, (src, target)) in plan.into_iter().enumerate() {
-        let tmp = src.with_file_name(format!(".patina-rename-{}-{i}", std::process::id()));
-        if let Err(e) = fs::rename(&src, &tmp) {
-            undo(&staged);
-            return Err(e);
-        }
-        staged.push((src, tmp, target));
+        staged.push(item);
     }
     // Step 2: temporary names to the new ones.
     for i in 0..staged.len() {
-        let (_, tmp, target) = &staged[i];
-        if let Err(e) = fs::rename(tmp, target) {
-            for (src, _, target) in &staged[..i] {
-                let _ = fs::rename(target, src);
-            }
-            undo(&staged[i..]);
-            return Err(e);
+        let item = &staged[i];
+        if let Err(e) = rename_exclusive(&item.temporary(), &item.target) {
+            return Err(rollback_renames(&mut staged, e));
         }
+        staged[i].committed = true;
     }
     Ok(())
 }
@@ -781,6 +860,113 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["Notes.txt"]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rename_never_replaces_a_symlink_or_its_target() {
+        use std::os::unix::fs::symlink;
+        let dir = temp_dir("rename-symlinks");
+        fs::write(dir.join("document.txt"), "original").unwrap();
+        symlink("document.txt", dir.join("shortcut.txt")).unwrap();
+        assert!(rename(&dir.join("shortcut.txt"), "document.txt").is_err());
+        assert!(rename(&dir.join("document.txt"), "shortcut.txt").is_err());
+        assert_eq!(fs::read_to_string(dir.join("document.txt")).unwrap(), "original");
+        assert_eq!(fs::read_link(dir.join("shortcut.txt")).unwrap(), Path::new("document.txt"));
+
+        symlink("missing-a", dir.join("a")).unwrap();
+        symlink("missing-b", dir.join("b")).unwrap();
+        assert!(rename(&dir.join("a"), "b").is_err());
+        assert_eq!(fs::read_link(dir.join("b")).unwrap(), Path::new("missing-b"));
+        rename(&dir.join("a"), "A").unwrap();
+        assert_eq!(fs::read_link(dir.join("A")).unwrap(), Path::new("missing-a"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn exclusive_rename_refuses_existing_files_and_broken_links() {
+        let dir = temp_dir("rename-exclusive");
+        fs::write(dir.join("source"), "source").unwrap();
+        fs::write(dir.join("target"), "keep").unwrap();
+        assert_eq!(rename_exclusive(&dir.join("source"), &dir.join("target")).unwrap_err().kind(), ErrorKind::AlreadyExists);
+        std::os::unix::fs::symlink("missing", dir.join("link")).unwrap();
+        assert_eq!(rename_exclusive(&dir.join("source"), &dir.join("link")).unwrap_err().kind(), ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(dir.join("target")).unwrap(), "keep");
+        assert_eq!(fs::read_to_string(dir.join("source")).unwrap(), "source");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn batch_failure_restores_swapped_files() {
+        let dir = temp_dir("batch-rollback");
+        for (name, body) in [("a", "A"), ("b", "B"), ("c", "C")] {
+            fs::write(dir.join(name), body).unwrap();
+        }
+        // The first two commits succeed; the third fails at the filesystem.
+        assert!(rename_many(&[
+            (dir.join("a"), "b".into()),
+            (dir.join("b"), "a".into()),
+            (dir.join("c"), "x".repeat(300)),
+        ]).is_err());
+        for (name, body) in [("a", "A"), ("b", "B"), ("c", "C")] {
+            assert_eq!(fs::read_to_string(dir.join(name)).unwrap(), body);
+        }
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 3);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn batch_staging_preserves_existing_files_and_concurrent_batches() {
+        use std::sync::Barrier;
+        let dir = temp_dir("batch-concurrent");
+        let existing = dir.join(format!(".patina-rename-{}-0", std::process::id()));
+        fs::write(&existing, "keep me").unwrap();
+        let barrier = Barrier::new(8);
+        std::thread::scope(|scope| {
+            for i in 0..8 {
+                let dir = &dir;
+                let barrier = &barrier;
+                fs::write(dir.join(format!("before-{i}")), format!("contents-{i}")).unwrap();
+                scope.spawn(move || {
+                    barrier.wait();
+                    rename_many(&[(dir.join(format!("before-{i}")), format!("after-{i}"))]).unwrap();
+                });
+            }
+        });
+        for i in 0..8 {
+            assert_eq!(fs::read_to_string(dir.join(format!("after-{i}"))).unwrap(), format!("contents-{i}"));
+        }
+        assert_eq!(fs::read_to_string(existing).unwrap(), "keep me");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 9);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn failed_rollback_keeps_originals_for_recovery() {
+        let dir = temp_dir("batch-recovery");
+        let staging = StagingDir::new(&dir).unwrap();
+        let temporary = staging.path.join("item");
+        fs::write(&temporary, "original").unwrap();
+        fs::write(dir.join("original"), "another process's file").unwrap();
+        let mut staged = vec![StagedRename { src: dir.join("original"), target: dir.join("target"), staging, committed: false }];
+        let error = rollback_renames(&mut staged, io::Error::other("failed"));
+        assert!(error.to_string().contains(temporary.to_str().unwrap()));
+        drop(staged);
+        assert_eq!(fs::read_to_string(&temporary).unwrap(), "original");
+        assert_eq!(fs::read_to_string(dir.join("original")).unwrap(), "another process's file");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn batch_rejects_parent_and_child_before_staging() {
+        let dir = temp_dir("batch-overlap");
+        fs::create_dir(dir.join("folder")).unwrap();
+        fs::write(dir.join("folder/child"), "original").unwrap();
+        assert!(rename_many(&[
+            (dir.join("folder/child"), "new-child".into()),
+            (dir.join("folder"), "new-folder".into()),
+        ]).is_err());
+        assert_eq!(fs::read_to_string(dir.join("folder/child")).unwrap(), "original");
         fs::remove_dir_all(&dir).unwrap();
     }
 }

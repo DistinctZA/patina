@@ -104,6 +104,7 @@ const undo = () => run("git", ["checkout", "--", ...bumped]);
 let dmg, update, manifest;
 try {
   run("npm", ["run", "check"]);
+  run("npm", ["test"]);
   run("cargo", ["test", "--quiet"], { cwd: join(root, "src-tauri") });
   // Also builds the update (Patina.app.tar.gz) and its signature. Only
   // releases do this, so building from source needs no key.

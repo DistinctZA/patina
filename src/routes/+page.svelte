@@ -241,7 +241,7 @@
       batch = { pane, entries: targets, existing: new Set(pane.all.map((e) => e.path.toLowerCase())) };
       return;
     }
-    const entry = pane.current;
+    const entry = targets[0];
     if (!entry) return;
     prompt = {
       title: `Rename “${entry.name}”`,

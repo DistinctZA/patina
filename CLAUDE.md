@@ -38,5 +38,6 @@ without Gatekeeper's warning.
 
 ```bash
 npm run check                      # Svelte/TypeScript
+npm test                           # Selection and navigation regressions
 cd src-tauri && cargo test         # Rust
 ```

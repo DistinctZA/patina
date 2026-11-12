@@ -117,6 +117,11 @@ export class PaneState {
         api.watchDir(this.id, listing.path).catch(() => (this.watched = ""));
       }
       return true;
+    } catch (err) {
+      // A late failure is as stale as a late success. In particular, a
+      // missing old folder must not trigger recovery after navigating away.
+      if (id !== this.loadId) return false;
+      throw err;
     } finally {
       if (id === this.loadId) {
         this.loading = false;
@@ -139,9 +144,12 @@ export class PaneState {
       this.refreshPending = true;
       return;
     }
+    const request = this.load(this.path, { keep: true });
+    const id = this.loadId;
     try {
-      await this.load(this.path, { keep: true });
+      await request;
     } catch (err) {
+      if (id !== this.loadId) return;
       if (this.tag || !isMissing(err)) throw err;
       await this.climbToExisting();
     }
@@ -149,11 +157,13 @@ export class PaneState {
 
   private async climbToExisting() {
     for (let dir = parentOf(this.path); ; dir = parentOf(dir)) {
+      const request = this.load(dir, { history: false });
+      const id = this.loadId;
       try {
-        await this.load(dir, { history: false });
+        await request;
         return;
       } catch {
-        if (dir === "/") return;
+        if (id !== this.loadId || dir === "/") return;
       }
     }
   }
