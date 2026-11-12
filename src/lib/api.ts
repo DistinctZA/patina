@@ -106,6 +106,7 @@ export const api = {
   createFolder: (dir: string, name: string) => invoke<string>("create_folder", { dir, name }),
   moveToTrash: (paths: string[]) => invoke<void>("move_to_trash", { paths }),
   openPath: (path: string) => invoke<void>("open_path", { path }),
+  quickLook: (paths: string[], index = 0) => invoke<void>("quick_look", { paths, index }),
   revealInFinder: (path: string) => invoke<void>("reveal_in_finder", { path }),
   watchDir: (pane: string, path: string) => invoke<void>("watch_dir", { pane, path }),
 };

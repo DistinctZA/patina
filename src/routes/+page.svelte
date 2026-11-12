@@ -323,7 +323,15 @@
   let typed = "";
   let typedTimer: ReturnType<typeof setTimeout>;
 
+  function quickLook(pane = active) {
+    const targets = pane.targets();
+    if (!targets.length) return;
+    const index = Math.max(0, targets.findIndex((entry) => entry.path === pane.current?.path));
+    run(() => api.quickLook(targets.map((entry) => entry.path), index));
+  }
+
   function onKey(e: KeyboardEvent) {
+    if (e.isComposing || e.defaultPrevented) return;
     if (prompt) {
       if (e.key === "Escape") prompt = null;
       return;
@@ -336,6 +344,7 @@
     // Let text fields have their keys; checkboxes (permissions) shouldn't
     // swallow the shortcuts after being clicked.
     if (e.target instanceof HTMLInputElement && e.target.type !== "checkbox") return;
+    if (e.target instanceof HTMLElement && (e.target.isContentEditable || e.target.closest("textarea, select"))) return;
 
     const pane = active;
     const grid = pane.view === "grid";
@@ -347,6 +356,12 @@
 
     const handled = (() => {
       switch (true) {
+        case e.key === " " && !cmd && !e.ctrlKey && !e.altKey && !e.shiftKey:
+          // Native controls keep their normal Space action. A held key must
+          // not reopen the panel when Quick Look closes on Space.
+          if (e.target instanceof HTMLElement && e.target.closest("button, input, [role='slider']")) return false;
+          if (!e.repeat) quickLook(pane);
+          return true;
         case e.key === "Tab":
           activeId = activeId === "left" ? "right" : "left";
           return true;
@@ -699,6 +714,7 @@
     const openAll = () => (one ? run(async () => pane.open(one)) : targets.forEach((t) => !t.isDir && api.openPath(t.path)));
     return [
       { label: "Open", shortcut: "⌘↓", action: openAll },
+      { label: "Quick Look", shortcut: "Space", action: () => quickLook(pane) },
       { label: "Show in Finder", shortcut: "⌥⌘R", action: () => run(() => api.revealInFinder(targets[0].path)) },
       "separator",
       { label: one ? "Cut" : `Cut ${targets.length} Items`, shortcut: "⌘X", action: () => copyToClipboard(targets, true) },

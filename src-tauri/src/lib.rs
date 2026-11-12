@@ -1,5 +1,7 @@
 mod fs_ops;
 mod pasteboard;
+#[cfg(target_os = "macos")]
+mod quick_look;
 mod thumbs;
 mod transfer;
 
@@ -236,6 +238,18 @@ fn clipboard_paste() -> Vec<String> {
     pasteboard::pasted_files()
 }
 
+/// Synchronous so Quick Look and its responder stay on AppKit's main thread.
+#[tauri::command]
+fn quick_look(window: tauri::Window, paths: Vec<String>, index: usize) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    return quick_look::show(&window, &paths, index);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (window, paths, index);
+        Err("Quick Look is only available on macOS".into())
+    }
+}
+
 /// Hands a drag that left the window over to macOS, so the files can be
 /// dropped into Finder, Mail, the desktop or any other app. Runs on the main
 /// thread (sync command), as AppKit requires. Emits `drag-out-done` when the
@@ -379,6 +393,7 @@ pub fn run() {
             clipboard_copy,
             clipboard_copy_text,
             clipboard_paste,
+            quick_look,
             drag_out,
             cancel_transfer,
             rename_many,

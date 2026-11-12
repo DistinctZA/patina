@@ -40,7 +40,7 @@ New versions appear under **Update** at the bottom of the sidebar.
 
 - **Two panes** with drag and drop, cut, copy and paste, including Finder support.
 - **Four views:** Icons, List, Columns and Gallery, with resizable panels.
-- **Quick previews** for images, video, audio, text and code.
+- **Quick previews** for images, video, audio, text and code, plus native Quick Look for files and documents.
 - **Batch rename** with a live preview of your changes.
 - **File transfers** with progress, cancellation and automatic names for conflicts. Deleted files go to the Bin.
 - **A useful sidebar** for drives, favourites, recent folders and Finder tags.

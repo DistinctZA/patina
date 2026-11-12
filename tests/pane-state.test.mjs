@@ -49,6 +49,73 @@ const deferred = () => {
 };
 const missing = "The item couldn't be found; it may have been moved or deleted";
 
+// Exercise the actual page shortcut and selection-to-IPC path. DOM stand-ins
+// distinguish editable fields and native controls from the file pane.
+class Element {
+  constructor(tag = "DIV", isContentEditable = false) {
+    this.tagName = tag;
+    this.isContentEditable = isContentEditable;
+  }
+  closest(selectors) {
+    return selectors.split(", ").includes(this.tagName.toLowerCase()) ? this : null;
+  }
+}
+class Input extends Element {
+  constructor(type = "text") { super("INPUT"); this.type = type; }
+}
+const pageFunction = (name) => {
+  const fn = parsed.statements.find((s) => ts.isFunctionDeclaration(s) && s.name?.text === name);
+  assert.ok(fn, `page contains ${name}`);
+  return transpile(fn.getText(parsed));
+};
+const keyboard = new Function("active", "api", "run", "HTMLElement", "HTMLInputElement", `
+  const window = { innerHeight: 900 };
+  let prompt = null, batch = null, menu = null, typed = "", typedTimer;
+  ${pageFunction("quickLook")}
+  ${pageFunction("onKey")}
+  return onKey;
+`);
+function pressSpace(pane, overrides = {}) {
+  const calls = [];
+  const onKey = keyboard(pane, { quickLook: (...args) => calls.push(args) }, (task) => task(), Element, Input);
+  const event = { key: " ", code: "Space", target: new Element(), metaKey: false,
+    ctrlKey: false, altKey: false, shiftKey: false, repeat: false, isComposing: false,
+    defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...overrides };
+  onKey(event);
+  return { calls, prevented: event.defaultPrevented };
+}
+
+test("Space previews the selection, including when the cursor was Command-deselected", () => {
+  const pane = new PaneState("left");
+  pane.all = [entry("A photo.png"), entry("B.pdf")];
+  pane.click(0, { metaKey: false, shiftKey: false });
+  pane.click(1, { metaKey: true, shiftKey: false });
+  assert.deepEqual(pressSpace(pane).calls, [[["/fixture/A photo.png", "/fixture/B.pdf"], 1]]);
+  pane.click(1, { metaKey: true, shiftKey: false });
+  assert.deepEqual(pressSpace(pane), { calls: [[["/fixture/A photo.png"], 0]], prevented: true });
+});
+
+test("Space uses the cursor without a selection and safely handles an empty folder", () => {
+  const pane = new PaneState("left");
+  assert.deepEqual(pressSpace(pane), { calls: [], prevented: true });
+  pane.all = [entry("写真.png")];
+  assert.deepEqual(pressSpace(pane).calls, [[["/fixture/写真.png"], 0]]);
+  assert.deepEqual(pressSpace(pane, { repeat: true }), { calls: [], prevented: true });
+});
+
+test("Space remains available to text fields, native controls and composition", () => {
+  const pane = new PaneState("left");
+  pane.all = [entry("A.txt")];
+  for (const target of [new Input(), new Input("search"), new Input("checkbox"),
+    new Element("TEXTAREA"), new Element("SELECT"), new Element("BUTTON"), new Element("DIV", true)]) {
+    assert.deepEqual(pressSpace(pane, { target }), { calls: [], prevented: false });
+  }
+  for (const override of [{ metaKey: true }, { altKey: true }, { ctrlKey: true }, { isComposing: true }]) {
+    assert.deepEqual(pressSpace(pane, override), { calls: [], prevented: false });
+  }
+  assert.deepEqual(pressSpace(pane, { defaultPrevented: true }), { calls: [], prevented: true });
+});
+
 test("Rename uses the remaining selection after Command-deselecting another file", async () => {
   const pane = new PaneState("left");
   pane.path = "/fixture";
