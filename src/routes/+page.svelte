@@ -326,8 +326,15 @@
   function quickLook(pane = active) {
     const targets = pane.targets();
     if (!targets.length) return;
-    const index = Math.max(0, targets.findIndex((entry) => entry.path === pane.current?.path));
-    run(() => api.quickLook(targets.map((entry) => entry.path), index));
+    const cursorPath = pane.current?.path;
+    const start = targets.find((entry) => entry.path === cursorPath) ?? targets[0];
+    // A single item can browse the visible files in pane order. Include a
+    // folder when opened directly. Multiple selected items form their own list.
+    const items = targets.length === 1
+      ? pane.entries.filter((entry) => !entry.isDir || isApp(entry) || entry.path === start.path)
+      : targets;
+    const paths = items.map((entry) => entry.path);
+    run(() => api.quickLook(paths, paths.indexOf(start.path)));
   }
 
   function onKey(e: KeyboardEvent) {

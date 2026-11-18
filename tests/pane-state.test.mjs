@@ -22,7 +22,7 @@ const paneCode = compileModule(transpile(read("src/lib/pane-state.svelte.ts")), 
   filename: "pane-state.svelte.js", generate: "client",
 }).js.code;
 writeFileSync(join(scratch, "pane.mjs"), resolvePackages(paneCode).replace('"./api"', '"./api.mjs"'));
-const { api } = await import(pathToFileURL(join(scratch, "api.mjs")));
+const { api, isApp } = await import(pathToFileURL(join(scratch, "api.mjs")));
 const { PaneState } = await import(pathToFileURL(join(scratch, "pane.mjs")));
 api.watchDir = async () => {};
 
@@ -68,7 +68,7 @@ const pageFunction = (name) => {
   assert.ok(fn, `page contains ${name}`);
   return transpile(fn.getText(parsed));
 };
-const keyboard = new Function("active", "api", "run", "HTMLElement", "HTMLInputElement", `
+const keyboard = new Function("active", "api", "run", "HTMLElement", "HTMLInputElement", "isApp", `
   const window = { innerHeight: 900 };
   let prompt = null, batch = null, menu = null, typed = "", typedTimer;
   ${pageFunction("quickLook")}
@@ -77,7 +77,7 @@ const keyboard = new Function("active", "api", "run", "HTMLElement", "HTMLInputE
 `);
 function pressSpace(pane, overrides = {}) {
   const calls = [];
-  const onKey = keyboard(pane, { quickLook: (...args) => calls.push(args) }, (task) => task(), Element, Input);
+  const onKey = keyboard(pane, { quickLook: (...args) => calls.push(args) }, (task) => task(), Element, Input, isApp);
   const event = { key: " ", code: "Space", target: new Element(), metaKey: false,
     ctrlKey: false, altKey: false, shiftKey: false, repeat: false, isComposing: false,
     defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...overrides };
@@ -85,14 +85,31 @@ function pressSpace(pane, overrides = {}) {
   return { calls, prevented: event.defaultPrevented };
 }
 
-test("Space previews the selection, including when the cursor was Command-deselected", () => {
+test("Space on one file opens its position among the visible files in display order", () => {
+  const pane = new PaneState("right");
+  pane.all = [
+    { ...entry("Photos folder"), isDir: true },
+    { ...entry("Photos.app"), isDir: true },
+    entry("Z photo.png"), entry("Notes.txt"), entry("M photo.jpg"), entry("A photo.png"),
+  ];
+  pane.setFilter("photo");
+  pane.moveCursor(3);
+  const paths = ["/fixture/Photos.app", "/fixture/Z photo.png", "/fixture/M photo.jpg", "/fixture/A photo.png"];
+  assert.deepEqual(pressSpace(pane).calls, [[paths, 2]]);
+  pane.clearSelection();
+  assert.deepEqual(pressSpace(pane).calls, [[paths, 2]]);
+  pane.moveCursor(0);
+  assert.deepEqual(pressSpace(pane).calls, [[["/fixture/Photos folder", ...paths], 0]]);
+});
+
+test("Space browses an explicit selection and opens the remaining file after Command-deselect", () => {
   const pane = new PaneState("left");
-  pane.all = [entry("A photo.png"), entry("B.pdf")];
+  pane.all = [entry("A photo.png"), entry("B.txt"), entry("C.pdf")];
   pane.click(0, { metaKey: false, shiftKey: false });
-  pane.click(1, { metaKey: true, shiftKey: false });
-  assert.deepEqual(pressSpace(pane).calls, [[["/fixture/A photo.png", "/fixture/B.pdf"], 1]]);
-  pane.click(1, { metaKey: true, shiftKey: false });
-  assert.deepEqual(pressSpace(pane), { calls: [[["/fixture/A photo.png"], 0]], prevented: true });
+  pane.click(2, { metaKey: true, shiftKey: false });
+  assert.deepEqual(pressSpace(pane).calls, [[["/fixture/A photo.png", "/fixture/C.pdf"], 1]]);
+  pane.click(2, { metaKey: true, shiftKey: false });
+  assert.deepEqual(pressSpace(pane).calls, [[["/fixture/A photo.png", "/fixture/B.txt", "/fixture/C.pdf"], 0]]);
 });
 
 test("Space uses the cursor without a selection and safely handles an empty folder", () => {

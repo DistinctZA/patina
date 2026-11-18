@@ -11,7 +11,7 @@ use objc2_foundation::{NSInteger, NSObjectProtocol, NSString, NSURL};
 use objc2_quick_look_ui::{QLPreviewItem, QLPreviewPanel, QLPreviewPanelDataSource, QLPreviewPanelDelegate};
 
 struct PreviewState {
-    items: RefCell<Vec<Retained<NSURL>>>,
+    paths: RefCell<Vec<String>>,
     // NSResponder's nextResponder is unretained. Keep the original chain alive.
     next: Option<Retained<NSResponder>>,
 }
@@ -25,7 +25,7 @@ define_class!(
     impl PatinaPreviewController {
         #[unsafe(method(acceptsPreviewPanelControl:))]
         fn accepts_preview_panel_control(&self, _panel: Option<&QLPreviewPanel>) -> bool {
-            !self.ivars().items.borrow().is_empty()
+            !self.ivars().paths.borrow().is_empty()
         }
 
         #[unsafe(method(beginPreviewPanelControl:))]
@@ -53,15 +53,19 @@ define_class!(
     unsafe impl QLPreviewPanelDataSource for PatinaPreviewController {
         #[unsafe(method(numberOfPreviewItemsInPreviewPanel:))]
         fn number_of_preview_items(&self, _panel: Option<&QLPreviewPanel>) -> NSInteger {
-            self.ivars().items.borrow().len() as NSInteger
+            self.ivars().paths.borrow().len() as NSInteger
         }
 
         #[unsafe(method_id(previewPanel:previewItemAtIndex:))]
         fn preview_item(&self, _panel: Option<&QLPreviewPanel>, index: NSInteger)
             -> Option<Retained<ProtocolObject<dyn QLPreviewItem>>>
         {
+            // A folder can contain thousands of files. Create file URLs as
+            // Quick Look requests them on the main thread.
+            let paths = self.ivars().paths.borrow();
             usize::try_from(index).ok()
-                .and_then(|index| self.ivars().items.borrow().get(index).cloned())
+                .and_then(|index| paths.get(index))
+                .map(|path| NSURL::fileURLWithPath(&NSString::from_str(path)))
                 .map(ProtocolObject::from_retained)
         }
     }
@@ -102,12 +106,13 @@ thread_local! {
     static CONTROLLER: RefCell<Option<Retained<PatinaPreviewController>>> = const { RefCell::new(None) };
 }
 
-/// Show the selected files using their real file URLs, including spaces and
-/// Unicode names. A synchronous Tauri command calls this on the main thread.
-pub fn show(window: &tauri::Window, paths: &[String], index: usize) -> Result<(), String> {
+/// Open Quick Look at `index` in the pane's ordered list of paths.
+/// A synchronous Tauri command calls this on the main thread.
+pub fn show(window: &tauri::Window, paths: Vec<String>, index: usize) -> Result<(), String> {
     if paths.is_empty() {
         return Ok(());
     }
+    let index = index.min(paths.len() - 1) as NSInteger;
     let mtm = MainThreadMarker::new().ok_or("Quick Look must open on the main thread")?;
     let raw_window = window.ns_window().map_err(|e| e.to_string())?;
     // Tauri owns this NSWindow for the duration of the command.
@@ -117,7 +122,7 @@ pub fn show(window: &tauri::Window, paths: &[String], index: usize) -> Result<()
         slot.get_or_insert_with(|| {
             let next = unsafe { window.nextResponder() };
             let this = PatinaPreviewController::alloc(mtm).set_ivars(PreviewState {
-                items: RefCell::new(Vec::new()),
+                paths: RefCell::new(Vec::new()),
                 next,
             });
             let this: Retained<PatinaPreviewController> = unsafe { msg_send![super(this), init] };
@@ -129,17 +134,13 @@ pub fn show(window: &tauri::Window, paths: &[String], index: usize) -> Result<()
         })
         .clone()
     });
-    *controller.ivars().items.borrow_mut() = paths
-        .iter()
-        .map(|path| NSURL::fileURLWithPath(&NSString::from_str(path)))
-        .collect();
-    // Drop all RefCell borrows before calling AppKit: reloadData calls our
-    // data source synchronously, and must be able to borrow the items again.
+    *controller.ivars().paths.borrow_mut() = paths;
+    // Finish replacing the paths before reloadData calls back into the data source.
     let panel = unsafe { QLPreviewPanel::sharedPreviewPanel(mtm) }.ok_or("Couldn't open Quick Look")?;
     unsafe {
         panel.updateController();
         panel.reloadData();
-        panel.setCurrentPreviewItemIndex(index.min(paths.len() - 1) as NSInteger);
+        panel.setCurrentPreviewItemIndex(index);
     }
     panel.makeKeyAndOrderFront(None);
     Ok(())

@@ -242,7 +242,7 @@ fn clipboard_paste() -> Vec<String> {
 #[tauri::command]
 fn quick_look(window: tauri::Window, paths: Vec<String>, index: usize) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    return quick_look::show(&window, &paths, index);
+    return quick_look::show(&window, paths, index);
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (window, paths, index);
