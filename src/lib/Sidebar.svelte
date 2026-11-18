@@ -34,8 +34,6 @@
     onshow,
     onresetfavorites,
     onclearrecents,
-    autoCheck,
-    onautocheck,
   }: {
     data: SidebarData | null;
     current: string;
@@ -53,9 +51,6 @@
     onshow: (section: string) => void;
     onresetfavorites: () => void;
     onclearrecents: () => void;
-    /** Whether Patina looks for new versions by itself. */
-    autoCheck: boolean;
-    onautocheck: (on: boolean) => void;
   } = $props();
 
   /** Sections that can be switched on and off, in sidebar order. */
@@ -223,7 +218,7 @@
     {/if}
   </nav>
 
-  <AppVersion {autoCheck} {onautocheck} />
+  <AppVersion />
 </aside>
 
 {#if menu}

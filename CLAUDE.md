@@ -1,43 +1,27 @@
 # Patina
 
-A dual-pane file manager for macOS: Rust (Tauri 2) backend in `src-tauri/`,
-Svelte 5 UI in `src/`. See README.md for features and layout.
+Patina is a dual-pane file manager for macOS, with a Rust/Tauri backend and a Svelte frontend. The README covers installation and development.
 
-## Releasing: every push is a release
+## Releases
 
-Don't `git push` on its own. Commit the work, then run:
+Every push to main is a source release. Commit the changes on main and pick the appropriate version increment.
 
 ```bash
-npm run release -- minor   # new features: 0.3.0 → 0.4.0
-npm run release -- patch   # fixes only:   0.4.0 → 0.4.1
+npm run release -- patch   # fixes
+npm run release -- minor   # new features
 ```
 
-The script bumps the version in package.json, package-lock.json,
-tauri.conf.json, Cargo.toml, Cargo.lock and the README badge; runs the checks
-and tests; builds the signed app and a signed .dmg; then commits
-"Release vX.Y.Z", tags it, pushes, and publishes a GitHub Release with the
-.dmg and notes taken from the commits since the last tag. If any check or
-build step fails, it undoes the version change and stops before committing.
+The release command updates the version, runs the checks, and builds a local app with ad hoc signing. It pushes the release tag and publishes a GitHub release with source archives. Release notes come from commit messages.
 
-Try `npm run release -- minor --dry-run` first to see the next version and notes.
+The same command publishes the Homebrew formula to DistinctZA/homebrew-tap with the SHA-256 of the tagged source archive. Edit `packaging/patina.rb.in` to change how Homebrew builds Patina. Publishing requires Git and GitHub CLI access to both repositories.
 
-Release notes are built from commit messages, so write commits for a reader:
-a short subject, then a body listing what changed.
-
-Each release also publishes a signed update (`Patina_X.Y.Z_aarch64.app.tar.gz`)
-and `latest.json`, which the in-app updater reads. They're signed with
-`~/.tauri/patina_updater.key` (plus `.key.password`), kept outside the repo;
-copy both to any other Mac you release from, or the script stops. Losing the
-key means installed copies can't update themselves any more.
-
-Notarization is optional: if a keychain login named `patina-notary` exists
-(see `scripts/notarize.mjs`), releases are notarized so downloads open
-without Gatekeeper's warning.
+Use `--dry-run` to preview a release. If publication is interrupted after tagging, run `npm run release -- --resume` from the release commit on main. To update just the formula for the latest release, run `npm run release:brew`.
 
 ## Checks
 
 ```bash
-npm run check                      # Svelte/TypeScript
-npm test                           # Selection and navigation regressions
-cd src-tauri && cargo test         # Rust
+npm run check
+npm test
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+npm run build:app
 ```

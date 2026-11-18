@@ -27,7 +27,6 @@
   import ContextMenu, { type MenuItem } from "$lib/ContextMenu.svelte";
   import TransferPanel from "$lib/TransferPanel.svelte";
   import { isCancelled, transfers, type JobProgress } from "$lib/transfers.svelte";
-  import { updates } from "$lib/updates.svelte";
   import {
     drag,
     dropHere,
@@ -76,13 +75,6 @@
     saveSettings({ ...settings, sidebarWidth, previewWidth: previewWidth ?? undefined, split });
   }
 
-  // Look for new versions at launch and twice a day, unless switched off.
-  // A derived, so other settings changes (Recents, on every folder) don't
-  // restart the schedule.
-  const autoUpdate = $derived(settings.autoUpdate !== false);
-  $effect(() => {
-    if (settingsReady) updates.auto(autoUpdate);
-  });
   let showSidebar = $state(true);
   let showPreview = $state(true);
   let searchInput = $state<HTMLInputElement>();
@@ -1005,8 +997,6 @@
       onshow={showSection}
       onresetfavorites={resetFavorites}
       onclearrecents={() => saveSettings({ ...settings, recents: [] })}
-      autoCheck={autoUpdate}
-      onautocheck={(on) => saveSettings({ ...settings, autoUpdate: on })}
     />
     <Divider
       left={sidebarCss}

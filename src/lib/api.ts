@@ -65,8 +65,6 @@ export type Settings = {
   hiddenSections?: string[];
   /** Recently visited folders, newest first. */
   recents?: string[];
-  /** Look for new versions at launch and twice a day; on unless false. */
-  autoUpdate?: boolean;
   /** Panel sizes set with the dividers; absent means the usual size. */
   sidebarWidth?: number;
   previewWidth?: number;

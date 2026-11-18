@@ -15,7 +15,7 @@ A fast, keyboard-friendly Finder alternative, built with Rust.
 </p>
 
 <p>
-  <a href="https://github.com/DistinctZA/patina/releases/latest"><b>Download for Mac</b></a> ·
+  <a href="#install-with-homebrew"><b>Install with Homebrew</b></a> ·
   <a href="#features">Features</a> ·
   <a href="#build-from-source">Build from source</a>
 </p>
@@ -26,15 +26,16 @@ A fast, keyboard-friendly Finder alternative, built with Rust.
 
 Two folders side by side, with quick previews and familiar Mac file management. Free, open source, and private: no account, ads, or tracking.
 
-## Download
+## Install with Homebrew
 
-**Apple silicon (M1 or later) · macOS 13 Ventura or later**
+Patina runs on **macOS 13 Ventura or later**. Homebrew installs the build tools and compiles Patina on your Mac. [Get Homebrew](https://brew.sh/)
 
-1. Get the `.dmg` from the [latest release](https://github.com/DistinctZA/patina/releases/latest).
-2. Open it and drag **Patina** into **Applications**.
-3. If macOS blocks the first launch, go to **System Settings → Privacy & Security → Open Anyway**.
+```bash
+brew install distinctza/tap/patina
+patina
+```
 
-New versions appear under **Update** at the bottom of the sidebar.
+To update, run `brew update` followed by `brew upgrade distinctza/tap/patina`.
 
 ## Features
 
@@ -53,14 +54,17 @@ New versions appear under **Update** at the bottom of the sidebar.
 
 ## Build from source
 
-Requires Rust, Node.js 20.19+, and Apple's command line tools. Intel Macs can also build from source.
+Install Apple's Command Line Tools with `xcode-select --install` if needed. You'll also need stable Rust and Node.js 22.12 or newer. [Get Rust](https://rustup.rs/) · [Get Node.js](https://nodejs.org/en/download)
 
 ```bash
 git clone https://github.com/DistinctZA/patina.git
 cd patina
-npm install
-npm run tauri dev
+npm ci
+npm run build:app
+open src-tauri/target/release/bundle/macos/Patina.app
 ```
+
+You can drag the resulting `Patina.app` to Applications. For development with live reload, run `npm run tauri dev`.
 
 ## License
 
