@@ -169,18 +169,18 @@ fn run(plan: Vec<(PathBuf, PathBuf, Action)>, t: &mut Ticker) -> io::Result<()> 
                         let (bytes, items) = measure(&src, t.cancel)?;
                         t.state.total_bytes += bytes;
                         t.state.total_items += items.saturating_sub(1);
-                        copy_then_delete(&src, &dest_dir, dest_dev, t)?;
+                        copy_cleanly(&src, &dest_dir, dest_dev, t, true)?;
                     }
                     Err(e) => return Err(e),
                 }
             }
             Action::Copy => {
                 t.working_on("Copying", &src);
-                copy_cleanly(&src, &dest_dir, dest_dev, t)?;
+                copy_cleanly(&src, &dest_dir, dest_dev, t, false)?;
             }
             Action::CopyThenDelete => {
                 t.working_on("Moving", &src);
-                copy_then_delete(&src, &dest_dir, dest_dev, t)?;
+                copy_cleanly(&src, &dest_dir, dest_dev, t, true)?;
             }
         }
     }
@@ -196,29 +196,125 @@ fn publish(src: &Path, dest_dir: &Path, name: &str) -> io::Result<PathBuf> {
         match rename_exclusive(src, &target) {
             Ok(()) => return Ok(target),
             Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) if e.raw_os_error() == Some(libc::ENOTSUP) || e.kind() == ErrorKind::Unsupported => {
+                return Err(io::Error::new(ErrorKind::Unsupported, format!(
+                    "The destination drive doesn't support the safe rename needed to place “{name}” here."
+                )));
+            }
             Err(e) => return Err(e),
         }
     }
 }
 
-fn copy_then_delete(src: &Path, dest_dir: &Path, dest_dev: u64, t: &mut Ticker) -> io::Result<()> {
-    copy_cleanly(src, dest_dir, dest_dev, t)?;
-    if fs::symlink_metadata(src)?.is_dir() {
-        fs::remove_dir_all(src)
-    } else {
-        fs::remove_file(src)
+struct CopiedEntry {
+    source: PathBuf,
+    before: fs::Metadata,
+}
+
+impl CopiedEntry {
+    fn same_inode(&self, now: &fs::Metadata) -> bool {
+        self.before.dev() == now.dev() && self.before.ino() == now.ino()
     }
+
+    fn same_version(&self, now: &fs::Metadata, check_ctime: bool) -> bool {
+        let before = &self.before;
+        self.same_inode(now)
+            && before.len() == now.len() && before.mode() == now.mode()
+            && before.uid() == now.uid() && before.gid() == now.gid()
+            && (before.mtime(), before.mtime_nsec()) == (now.mtime(), now.mtime_nsec())
+            && (!check_ctime || (before.ctime(), before.ctime_nsec()) == (now.ctime(), now.ctime_nsec()))
+    }
+
+    fn changed(&self) -> io::Error {
+        io::Error::other(format!("Move stopped because “{}” changed during the transfer.", self.source.display()))
+    }
+
+    fn metadata_at(&self, path: &Path) -> io::Result<fs::Metadata> {
+        fs::symlink_metadata(path).map_err(|e| if e.kind() == ErrorKind::NotFound { self.changed() } else { e })
+    }
+}
+
+/// Claim the source name before cleanup so an editor's replacement at the old
+/// path is never unlinked. On a conflict, put the surviving original back.
+fn remove_copied_source(src: &Path, name: &str, copied: &mut [CopiedEntry]) -> io::Result<()> {
+    let parent = src.parent().ok_or_else(|| io::Error::other("Can't move the root folder"))?;
+    let stage = StagingDir::new(parent)?;
+    let staged = stage.path.join(src.file_name().unwrap());
+    // This slot belongs to our newly created directory. An ordinary rename
+    // also works on source volumes that lack exclusive rename support.
+    fs::rename(src, &staged)?;
+    let staged_path = |entry: &CopiedEntry| stage.path.join(entry.source.strip_prefix(parent).unwrap());
+    let cleanup = (|| {
+        for entry in &mut *copied {
+            let now = entry.metadata_at(&staged_path(entry))?;
+            // Renaming the top item changes its ctime. Children keep theirs.
+            if !entry.same_version(&now, entry.source != src) {
+                return Err(entry.changed());
+            }
+            entry.before = now;
+        }
+        // Entries were recorded children first. Remove only known, unchanged
+        // leaves and empty folders. A newly added child keeps its folder alive.
+        for entry in copied {
+            let path = staged_path(entry);
+            let now = match fs::symlink_metadata(&path) {
+                Ok(meta) => meta,
+                // macOS can remove an AppleDouble sidecar with its data file.
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            if entry.before.is_dir() {
+                if !entry.same_inode(&now) {
+                    return Err(entry.changed());
+                }
+                fs::remove_dir(path)?;
+            } else {
+                // Removing a sibling hard link changes ctime on the shared inode.
+                if !entry.same_version(&now, entry.before.nlink() == now.nlink()) {
+                    return Err(entry.changed());
+                }
+                fs::remove_file(path)?;
+            }
+        }
+        Ok(())
+    })();
+    if let Err(e) = cleanup {
+        let recovered = publish(&staged, parent, name).unwrap_or(staged);
+        return Err(io::Error::other(format!("{e} The remaining original is at “{}”.", recovered.display())));
+    }
+    if fs::symlink_metadata(src).is_ok() {
+        return Err(io::Error::other(format!("A new item appeared at “{}” during the move and was kept.", src.display())));
+    }
+    Ok(())
 }
 
 /// Build the copy in a private directory, then publish it atomically. Failure
 /// cleanup can only touch this job's partial copy, never another job's files.
-fn copy_cleanly(src: &Path, dest_dir: &Path, dest_dev: u64, t: &mut Ticker) -> io::Result<()> {
+fn copy_cleanly(src: &Path, dest_dir: &Path, dest_dev: u64, t: &mut Ticker, moving: bool) -> io::Result<()> {
+    let name = file_name(src)?;
     let staging = StagingDir::new(dest_dir)?;
     let partial = staging.path.join("item");
     let result = (|| {
-        copy_tree(src, &partial, dest_dev, t)?;
+        let mut copied = Vec::new();
+        copy_tree(src, &partial, dest_dev, t, &mut |source, target, meta| {
+            if moving {
+                verify_move_metadata(source, target, &meta)?;
+                copied.push(CopiedEntry { source: source.to_owned(), before: meta });
+            }
+            Ok(())
+        })?;
+        for entry in &copied {
+            t.check()?;
+            if !entry.same_version(&entry.metadata_at(&entry.source)?, true) {
+                return Err(entry.changed());
+            }
+        }
         t.check()?;
-        publish(&partial, dest_dir, &file_name(src)?)?;
+        let target = publish(&partial, dest_dir, &name)?;
+        if moving {
+            remove_copied_source(src, &name, &mut copied)
+                .map_err(|e| io::Error::other(format!("A copy is at “{}”. {e}", target.display())))?;
+        }
         Ok(())
     })();
     if result.is_err() {
@@ -265,37 +361,82 @@ fn measure(path: &Path, cancel: &AtomicBool) -> io::Result<(u64, u64)> {
 }
 
 /// Copies files, folders and symlinks (as links).
-fn copy_tree(src: &Path, dest: &Path, dest_dev: u64, t: &mut Ticker) -> io::Result<()> {
+fn copy_tree(
+    src: &Path, dest: &Path, dest_dev: u64, t: &mut Ticker,
+    record: &mut impl FnMut(&Path, &Path, fs::Metadata) -> io::Result<()>,
+) -> io::Result<()> {
     t.check()?;
     let meta = fs::symlink_metadata(src)?;
     if meta.file_type().is_symlink() {
         std::os::unix::fs::symlink(fs::read_link(src)?, dest)?;
-        t.add(0, 1)
+        #[cfg(target_os = "macos")]
+        copy_metadata(src, dest)?;
+        t.add(0, 1)?;
     } else if meta.is_dir() {
         fs::create_dir(dest)?;
         t.add(0, 1)?;
         for item in fs::read_dir(src)? {
             let item = item?;
-            copy_tree(&item.path(), &dest.join(item.file_name()), dest_dev, t)?;
+            copy_tree(&item.path(), &dest.join(item.file_name()), dest_dev, t, record)?;
         }
         // Apply metadata after the children, so copying still works for
         // read-only folders and doesn't change the preserved modification date.
-        copy_directory_metadata(src, dest)
+        copy_metadata(src, dest)?;
     } else {
         t.working_on(t.state.verb, src);
         if meta.dev() != dest_dev && meta.len() >= CHUNKED_MIN {
-            copy_chunked(src, dest, &meta, t)?;
+            copy_chunked(src, dest, t)?;
         } else {
             // On APFS within a disk this is a clone: instant, and takes no space.
             fs::copy(src, dest)?;
             t.add(meta.len(), 0)?;
         }
-        t.add(0, 1)
+        t.add(0, 1)?;
+    }
+    record(src, dest, meta)
+}
+
+/// Some filesystems report a successful native copy even when they silently
+/// discard access rules or make a read-only file writable. Check before moving.
+fn verify_move_metadata(src: &Path, dest: &Path, meta: &fs::Metadata) -> io::Result<()> {
+    let loss = |what: &str| io::Error::other(format!(
+        "The destination couldn't preserve {what} for “{}”. The original was kept.", src.display()
+    ));
+    if meta.permissions().readonly() && !fs::symlink_metadata(dest)?.permissions().readonly() {
+        return Err(loss("read-only permissions"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let flags = metadata_flags(src)?;
+        if flags & libc::COPYFILE_ACL != 0 && metadata_flags(dest)? & libc::COPYFILE_ACL == 0 {
+            return Err(loss("the access rules"));
+        }
+        // AppleDouble sidecars have no attributes of their own and reject
+        // getxattr. Their contents are already included in the directory copy.
+        if flags & libc::COPYFILE_XATTR == 0 {
+            return Ok(());
+        }
+    }
+    const TAGS: &str = "com.apple.metadata:_kMDItemUserTags";
+    match xattr::get(src, TAGS) {
+        Ok(Some(tags)) if xattr::get(dest, TAGS)?.as_ref() != Some(&tags) => Err(loss("the Finder tags")),
+        Err(e) if e.kind() != ErrorKind::Unsupported && e.raw_os_error() != Some(libc::ENOTSUP) => Err(e),
+        _ => Ok(()),
     }
 }
 
 #[cfg(target_os = "macos")]
-fn copy_directory_metadata(src: &Path, dest: &Path) -> io::Result<()> {
+fn metadata_flags(path: &Path) -> io::Result<libc::copyfile_flags_t> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let path = CString::new(path.as_os_str().as_bytes())?;
+    let flags = libc::COPYFILE_CHECK | libc::COPYFILE_ACL | libc::COPYFILE_XATTR | libc::COPYFILE_NOFOLLOW;
+    let result = unsafe { libc::copyfile(path.as_ptr(), std::ptr::null(), std::ptr::null_mut(), flags) };
+    if result < 0 { Err(io::Error::last_os_error()) } else { Ok(result as libc::copyfile_flags_t) }
+}
+
+#[cfg(target_os = "macos")]
+fn copy_metadata(src: &Path, dest: &Path) -> io::Result<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
     let src = CString::new(src.as_os_str().as_bytes())?;
@@ -308,7 +449,7 @@ fn copy_directory_metadata(src: &Path, dest: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn copy_directory_metadata(src: &Path, dest: &Path) -> io::Result<()> {
+fn copy_metadata(src: &Path, dest: &Path) -> io::Result<()> {
     let meta = fs::metadata(src)?;
     for name in xattr::list(src)? {
         if let Some(value) = xattr::get(src, &name)? {
@@ -323,7 +464,7 @@ fn copy_directory_metadata(src: &Path, dest: &Path) -> io::Result<()> {
 /// Copies a big file piece by piece, reporting as it goes and stopping
 /// promptly on Cancel. Keeps permissions, the modified date, and extended
 /// attributes (Finder tags among them), as `fs::copy` does.
-fn copy_chunked(src: &Path, dest: &Path, meta: &fs::Metadata, t: &mut Ticker) -> io::Result<()> {
+fn copy_chunked(src: &Path, dest: &Path, t: &mut Ticker) -> io::Result<()> {
     let mut reader = fs::File::open(src)?;
     let mut writer = fs::File::create_new(dest)?;
     let mut buf = vec![0u8; CHUNK];
@@ -335,18 +476,7 @@ fn copy_chunked(src: &Path, dest: &Path, meta: &fs::Metadata, t: &mut Ticker) ->
         writer.write_all(&buf[..n])?;
         t.add(n as u64, 0)?;
     }
-    writer.set_permissions(meta.permissions())?;
-    if let Ok(modified) = meta.modified() {
-        writer.set_modified(modified)?;
-    }
-    if let Ok(names) = xattr::list(src) {
-        for name in names {
-            if let Ok(Some(value)) = xattr::get(src, &name) {
-                let _ = xattr::set(dest, &name, &value);
-            }
-        }
-    }
-    Ok(())
+    copy_metadata(src, dest)
 }
 
 #[cfg(test)]
@@ -482,14 +612,126 @@ mod tests {
 
         let cancel = AtomicBool::new(false);
         let mut t = Ticker::new(&cancel, |_| {});
-        let meta = fs::metadata(&src).unwrap();
-        copy_chunked(&src, &root.join("copy.bin"), &meta, &mut t).unwrap();
+        copy_chunked(&src, &root.join("copy.bin"), &mut t).unwrap();
 
         assert_eq!(fs::read(root.join("copy.bin")).unwrap(), data);
         assert_eq!(fs::metadata(root.join("copy.bin")).unwrap().permissions().mode() & 0o777, 0o640);
         assert_eq!(xattr::get(root.join("copy.bin"), "com.example.patina-test").unwrap().as_deref(), Some(&b"tag"[..]));
         assert_eq!(t.progress().done_bytes, data.len() as u64);
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn cross_volume_move_keeps_edits_replacements_and_new_children() {
+        for change in ["edit", "replace", "add"] {
+            let root = temp_dir(&format!("changed-{change}"));
+            let folder = root.join("folder");
+            let dest = root.join("dest");
+            fs::create_dir(&folder).unwrap();
+            fs::create_dir(&dest).unwrap();
+            let file = folder.join("notes");
+            fs::write(&file, "old").unwrap();
+            let cancel = AtomicBool::new(false);
+            let mut t = Ticker::new(&cancel, |p| {
+                if p.done_items != 2 { return; }
+                match change {
+                    "edit" => fs::write(&file, "new").unwrap(),
+                    "replace" => {
+                        let replacement = root.join("new-save");
+                        fs::write(&replacement, "new").unwrap();
+                        fs::rename(replacement, &file).unwrap();
+                    }
+                    _ => fs::write(folder.join("new notes"), "also keep me").unwrap(),
+                }
+            });
+            t.every = Duration::ZERO;
+            let device = fs::metadata(&dest).unwrap().dev();
+            let error = copy_cleanly(&folder, &dest, device, &mut t, true).unwrap_err();
+            drop(t);
+            assert!(error.to_string().contains("changed"), "{error}");
+            if change == "add" {
+                assert_eq!(fs::read_to_string(folder.join("new notes")).unwrap(), "also keep me");
+            } else {
+                assert_eq!(fs::read_to_string(file).unwrap(), "new");
+            }
+            assert_eq!(fs::read_dir(dest).unwrap().count(), 0);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn cleanup_restores_a_replacement_and_never_removes_unlisted_children() {
+        let root = temp_dir("cleanup-conflict");
+        let file = root.join("notes");
+        fs::write(&file, "old").unwrap();
+        let mut copied = [CopiedEntry { before: fs::symlink_metadata(&file).unwrap(), source: file.clone() }];
+        fs::write(root.join("replacement"), "new").unwrap();
+        fs::rename(root.join("replacement"), &file).unwrap();
+        assert!(remove_copied_source(&file, "notes", &mut copied).is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "new");
+
+        let folder = root.join("folder");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("added"), "mine").unwrap();
+        let mut copied = [CopiedEntry { before: fs::symlink_metadata(&folder).unwrap(), source: folder.clone() }];
+        assert!(remove_copied_source(&folder, "folder", &mut copied).is_err());
+        assert_eq!(fs::read_to_string(folder.join("added")).unwrap(), "mine");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn chunked_move_preserves_read_only_files_finder_tags_and_acl() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+        let root = temp_dir("chunked-metadata");
+        let src = root.join("record");
+        let dest = root.join("dest");
+        fs::create_dir(&dest).unwrap();
+        fs::File::create(&src).unwrap().set_len(CHUNKED_MIN).unwrap();
+        let mut tag = Vec::new();
+        plist::to_writer_binary(&mut tag, &["Work\n6"]).unwrap();
+        let key = "com.apple.metadata:_kMDItemUserTags";
+        xattr::set(&src, key, &tag).unwrap();
+        assert!(Command::new("/bin/chmod").args(["+a", "everyone allow readattr"]).arg(&src).status().unwrap().success());
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o444)).unwrap();
+        let different_device = fs::metadata(&src).unwrap().dev().wrapping_add(1);
+        quiet(|t| copy_cleanly(&src, &dest, different_device, t, true)).unwrap();
+        let moved = dest.join("record");
+        assert!(!src.exists());
+        let meta = fs::metadata(&moved).unwrap();
+        assert_eq!(meta.len(), CHUNKED_MIN);
+        assert_eq!(meta.permissions().mode() & 0o777, 0o444);
+        assert_eq!(xattr::get(&moved, key).unwrap(), Some(tag));
+        let acl = Command::new("/bin/ls").arg("-lde").arg(&moved).output().unwrap();
+        assert!(String::from_utf8_lossy(&acl.stdout).contains("everyone allow readattr"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn moves_detect_metadata_a_destination_silently_dropped() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+        let root = temp_dir("missing-metadata");
+        let src = root.join("source");
+        let dest = root.join("copy");
+        fs::write(&src, "bytes").unwrap();
+        fs::write(&dest, "bytes").unwrap();
+        let verify = || verify_move_metadata(&src, &dest, &fs::symlink_metadata(&src).unwrap());
+        let tags = "com.apple.metadata:_kMDItemUserTags";
+        let mut value = Vec::new();
+        plist::to_writer_binary(&mut value, &["Work\n6"]).unwrap();
+        xattr::set(&src, tags, &value).unwrap();
+        assert!(verify().unwrap_err().to_string().contains("Finder tags"));
+        xattr::set(&dest, tags, &value).unwrap();
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o444)).unwrap();
+        assert!(verify().unwrap_err().to_string().contains("read-only"));
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o444)).unwrap();
+        assert!(Command::new("/bin/chmod").args(["+a", "everyone allow readattr"]).arg(&src).status().unwrap().success());
+        assert!(verify().unwrap_err().to_string().contains("access rules"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -561,6 +803,8 @@ mod tests {
         let src = root.join("private");
         fs::create_dir(&src).unwrap();
         fs::write(src.join("child"), "contents").unwrap();
+        fs::hard_link(src.join("child"), src.join("another name")).unwrap();
+        std::os::unix::fs::symlink("missing", src.join("broken link")).unwrap();
         fs::set_permissions(&src, fs::Permissions::from_mode(0o700)).unwrap();
         let modified = UNIX_EPOCH + Duration::from_secs(1_000_000);
         fs::File::open(&src).unwrap().set_times(fs::FileTimes::new().set_modified(modified)).unwrap();
@@ -573,7 +817,7 @@ mod tests {
             let device = fs::metadata(&dest).unwrap().dev();
             if moving {
                 // Exercise the cross-volume move path without needing a mounted disk.
-                quiet(|t| copy_then_delete(&src, &dest, device, t)).unwrap();
+                quiet(|t| copy_cleanly(&src, &dest, device, t, true)).unwrap();
                 assert!(!src.exists());
             } else {
                 quiet(|t| transfer(&[src.clone()], &dest, Mode::Copy, t)).unwrap();
@@ -583,6 +827,7 @@ mod tests {
             assert_eq!(fs::metadata(&copy).unwrap().modified().unwrap(), modified);
             assert_eq!(xattr::get(&copy, "com.apple.metadata:_kMDItemUserTags").unwrap(), Some(tags.clone()));
             assert_eq!(fs::read_to_string(copy.join("child")).unwrap(), "contents");
+            assert_eq!(fs::read_link(copy.join("broken link")).unwrap(), Path::new("missing"));
             assert_eq!(fs::read_dir(&dest).unwrap().count(), 1);
         }
         fs::remove_dir_all(root).unwrap();
