@@ -96,8 +96,8 @@ export const api = {
   /** Renames several items at once; pairs of [path, new name]. */
   renameMany: (renames: [string, string][]) => invoke<void>("rename_many", { renames }),
   /** The system clipboard, shared with Finder. */
-  clipboardCopy: (paths: string[]) => invoke<void>("clipboard_copy", { paths }),
-  clipboardPaste: () => invoke<string[]>("clipboard_paste"),
+  clipboardCopy: (paths: string[], cut = false) => invoke<void>("clipboard_copy", { paths, cut }),
+  clipboardPaste: () => invoke<{ paths: string[]; cut: boolean }>("clipboard_paste"),
   /** Plain text on the clipboard, for Copy Path. */
   clipboardCopyText: (text: string) => invoke<void>("clipboard_copy_text", { text }),
   /** Hands a drag over to macOS, for dropping into Finder or other apps. */

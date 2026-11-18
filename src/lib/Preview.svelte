@@ -83,8 +83,9 @@
       if (wantsThumbnail(e)) thumbnailUrl(e, 640).then((u) => alive && (thumb = u));
     };
     const kind = mediaOf(e);
-    // Wallpaper descriptors are XML that points at a picture: show the picture.
-    if (e.isDir || extension(e.name) === "madesktop") quickLook();
+    // PDFs can be entirely ASCII. Show the page, and the picture for wallpaper descriptors.
+    const ext = extension(e.name);
+    if (e.isDir || ext === "pdf" || ext === "madesktop") quickLook();
     else if (kind !== "image" && kind !== "video" && kind !== "audio") {
       // Text and code show their contents; everything else (PDFs, Office
       // files, …) gets a Quick Look picture.

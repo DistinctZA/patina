@@ -11,7 +11,7 @@ import type { Entry } from "./api";
 
 export type DragPayload =
   | { kind: "entries"; entries: Entry[] }
-  | { kind: "favorite"; index: number }
+  | { kind: "favorite"; path: string }
   /** Files dragged in from Finder or another app. */
   | { kind: "files"; paths: string[] };
 

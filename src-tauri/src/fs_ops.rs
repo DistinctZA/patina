@@ -58,7 +58,11 @@ fn entry_for(path: PathBuf, name: String) -> Entry {
     let finder_hidden = link_meta.as_ref().is_some_and(has_hidden_flag);
     // Follow symlinks so a link to a folder behaves like a folder; fall back
     // to the link itself when the target is missing.
-    let meta = fs::metadata(&path).ok().or(link_meta);
+    let meta = if is_symlink || link_meta.is_none() {
+        fs::metadata(&path).ok().or(link_meta)
+    } else {
+        link_meta
+    };
     let (is_dir, size, modified) = match meta {
         Some(m) => (m.is_dir(), if m.is_dir() { 0 } else { m.len() }, millis(m.modified())),
         None => (false, 0, None),
@@ -258,7 +262,7 @@ pub fn read_text(path: &Path, max_bytes: usize) -> io::Result<Option<TextPreview
     let len = file.metadata()?.len();
     let mut buf = Vec::with_capacity(max_bytes.min(len as usize));
     file.take(max_bytes as u64).read_to_end(&mut buf)?;
-    if buf[..buf.len().min(8192)].contains(&0) {
+    if buf.starts_with(b"%PDF-") || buf[..buf.len().min(8192)].contains(&0) {
         return Ok(None);
     }
     let text = String::from_utf8_lossy(&buf);
@@ -736,13 +740,30 @@ mod tests {
     }
 
     #[test]
+    fn listings_follow_links_and_keep_broken_links_visible() {
+        let dir = temp_dir("listing-links");
+        fs::create_dir(dir.join("folder")).unwrap();
+        fs::write(dir.join("file"), "abc").unwrap();
+        std::os::unix::fs::symlink("folder", dir.join("folder link")).unwrap();
+        std::os::unix::fs::symlink("missing", dir.join("broken")).unwrap();
+        let listing = list_dir(&dir, false, SortBy::Name, false).unwrap();
+        let entry = |name: &str| listing.entries.iter().find(|e| e.name == name).unwrap();
+        assert!(entry("folder link").is_dir && entry("folder link").is_symlink);
+        assert!(entry("broken").is_symlink && !entry("broken").is_dir);
+        assert_eq!(entry("file").size, 3);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn text_preview_skips_binary() {
         let dir = temp_dir("text");
         fs::write(dir.join("a.txt"), "hello\nworld").unwrap();
         fs::write(dir.join("b.bin"), [0u8, 159, 146, 150, 0, 1]).unwrap();
         fs::write(dir.join("big.txt"), "x".repeat(100)).unwrap();
+        fs::write(dir.join("document"), b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>").unwrap();
         assert_eq!(read_text(&dir.join("a.txt"), 1024).unwrap().unwrap().text, "hello\nworld");
         assert!(read_text(&dir.join("b.bin"), 1024).unwrap().is_none());
+        assert!(read_text(&dir.join("document"), 1024).unwrap().is_none());
         assert!(read_text(&dir.join("big.txt"), 10).unwrap().unwrap().truncated);
         fs::remove_dir_all(&dir).unwrap();
     }

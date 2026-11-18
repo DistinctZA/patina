@@ -159,18 +159,11 @@
   const itemsLabel = (entries: Entry[]) => (entries.length === 1 ? `“${entries[0].name}”` : `${entries.length} items`);
 
   /** Puts files on the system clipboard, so they paste in Finder too. */
-  /**
-   * Files cut with ⌘X. They go on the clipboard like a copy, and the next
-   * paste moves them, as long as the clipboard still holds exactly them.
-   */
-  let cut: Set<string> | null = null;
-
   function copyToClipboard(entries = active.targets(), asCut = false) {
     if (!entries.length) return;
     const paths = entries.map((e) => e.path);
     run(() =>
-      api.clipboardCopy(paths).then(() => {
-        cut = asCut ? new Set(paths) : null;
+      api.clipboardCopy(paths, asCut).then(() => {
         showNote(asCut ? `Cut ${itemsLabel(entries)}: paste to move` : `Copied ${itemsLabel(entries)}`);
       }),
     );
@@ -182,11 +175,9 @@
     if (!pane.isFolder) return showError("Open a folder to paste into.");
     api
       .clipboardPaste()
-      .then((paths) => {
+      .then(({ paths, cut }) => {
         if (!paths.length) return showNote("Nothing to paste");
-        const wasCut = cut != null && cut.size === paths.length && paths.every((p) => cut!.has(p));
-        if (wasCut) cut = null;
-        return moveOrCopy(paths, pane.path, move || wasCut ? "move" : "copy");
+        return moveOrCopy(paths, pane.path, move || cut ? "move" : "copy");
       })
       .catch(showError);
   }
@@ -200,7 +191,6 @@
   /** Copy Path: one path per line, as text, through the Mac's own clipboard. */
   function copyPaths(paths: string[]) {
     if (!paths.length) return;
-    cut = null;
     api
       .clipboardCopyText(paths.join("\n"))
       .then(() => showNote(paths.length === 1 ? "Copied path" : `Copied ${paths.length} paths`))
@@ -507,11 +497,16 @@
 
   // ── Startup ────────────────────────────────────────────────────────────
 
-  const loadSidebar = () =>
-    api
-      .sidebar(settings.favorites ?? null)
-      .then((d) => (sidebarData = d))
-      .catch(showError);
+  let sidebarRequest = 0;
+  async function loadSidebar() {
+    const request = ++sidebarRequest;
+    try {
+      const data = await api.sidebar(settings.favorites ?? null);
+      if (request === sidebarRequest) sidebarData = data;
+    } catch (err) {
+      if (request === sidebarRequest) showError(err);
+    }
+  }
 
   // Saves go out one at a time, in order, so a quick run of changes can't
   // finish out of order and leave an older version on disk.
@@ -522,34 +517,37 @@
     saving = saving.then(() => api.writeSettings(next)).catch(showError);
   }
 
-  /** The Favourites as shown, so the first edit starts from the defaults. */
-  const favoritePaths = () => sidebarData?.favorites.map((f) => f.path) ?? [];
-
-  function setFavorites(paths: string[]) {
-    saveSettings({ ...settings, favorites: paths });
-    loadSidebar();
+  // Start each edit from the latest saved order, including unplugged drives.
+  // Only the first edit of the default list needs to ask macOS for its paths.
+  let favoriteEdits: Promise<void> = Promise.resolve();
+  function editFavorites(edit?: (paths: string[]) => string[] | Promise<string[]>) {
+    favoriteEdits = favoriteEdits.then(async () => {
+      if (edit) {
+        const paths = settings.favorites ?? (await api.sidebar(null)).favorites.map((f) => f.path);
+        const favorites = await edit(paths);
+        saveSettings({ ...settings, favorites });
+      } else {
+        const { favorites: _, ...rest } = settings;
+        saveSettings(rest);
+      }
+      void loadSidebar();
+    }).catch(showError);
   }
 
-  /** Adds folders at `index` (or the end); ones already there just move. */
-  function addFavorites(paths: string[], index: number | null) {
-    const list = favoritePaths().filter((p) => !paths.includes(p));
-    const at = Math.min(index ?? list.length, list.length);
-    list.splice(at, 0, ...paths);
-    setFavorites(list);
+  function insertFavorites(list: string[], paths: string[], before: string | null) {
+    const adding = new Set(paths);
+    const anchor = before == null ? -1 : list.indexOf(before);
+    const at = anchor < 0 ? list.length : anchor;
+    const keep = (path: string) => !adding.has(path);
+    return [...list.slice(0, at).filter(keep), ...adding, ...list.slice(at).filter(keep)];
   }
 
-  function moveFavorite(from: number, to: number | null) {
-    const list = favoritePaths();
-    const [item] = list.splice(from, 1);
-    if (item === undefined) return;
-    // Dropping below its old slot shifts the target up by one.
-    const at = to == null ? list.length : to > from ? to - 1 : to;
-    list.splice(at, 0, item);
-    setFavorites(list);
+  function addFavorites(paths: string[], before: string | null) {
+    editFavorites((list) => insertFavorites(list, paths, before));
   }
 
-  /** Adds the folders among files dropped from Finder (only paths are known). */
-  async function addDroppedFolders(paths: string[], index: number | null) {
+  /** Folders among files dropped from Finder, which supplies only paths. */
+  async function droppedFolders(paths: string[]) {
     const checked = await Promise.all(
       paths.map((p) =>
         api
@@ -559,18 +557,16 @@
       ),
     );
     const folders = checked.filter((p): p is string => p != null);
-    if (folders.length) addFavorites(folders, index);
-    else showError("Only folders can be added to Favourites.");
+    if (!folders.length) throw "Only folders can be added to Favourites.";
+    return folders;
   }
 
   function removeFavorite(path: string) {
-    setFavorites(favoritePaths().filter((p) => p !== path));
+    editFavorites((paths) => paths.filter((p) => p !== path));
   }
 
   function resetFavorites() {
-    const { favorites: _, ...rest } = settings;
-    saveSettings(rest);
-    loadSidebar();
+    editFavorites();
   }
 
   /** Shows or hides a whole sidebar section (from its right-click menu). */
@@ -665,8 +661,11 @@
   });
 
   setDropHandler((payload, target, { alt, meta }) => {
+    const before = target.index == null ? null : sidebarData?.favorites[target.index]?.path ?? null;
     if (payload.kind === "favorite") {
-      if (target.zone === "favorites") moveFavorite(payload.index, target.index);
+      if (target.zone === "favorites") {
+        editFavorites((list) => list.includes(payload.path) ? insertFavorites(list, [payload.path], before) : list);
+      }
       return;
     }
     const verdict = judge(payload, target, alt, meta);
@@ -676,9 +675,10 @@
     }
     if (verdict.verb === "Add") {
       if (payload.kind === "entries") {
-        addFavorites(payload.entries.filter((e) => e.isDir && !isApp(e)).map((e) => e.path), target.index);
+        const paths = payload.entries.filter((e) => e.isDir && !isApp(e)).map((e) => e.path);
+        addFavorites(paths, before);
       } else if (payload.kind === "files") {
-        addDroppedFolders(payload.paths, target.index);
+        editFavorites(async (list) => insertFavorites(list, await droppedFolders(payload.paths), before));
       }
       return;
     }
@@ -809,7 +809,7 @@
       timers.volumes = setTimeout(loadSidebar, 500);
     });
 
-    api
+    favoriteEdits = api
       .readSettings()
       .then((saved) => {
         settings = saved;
@@ -1132,7 +1132,7 @@
     {@const p = drag.payload}
     {@const label =
       p.kind === "favorite"
-        ? (sidebarData?.favorites[p.index]?.name ?? "")
+        ? (sidebarData?.favorites.find((place) => place.path === p.path)?.name ?? basename(p.path))
         : p.kind === "files"
           ? p.paths.length === 1
             ? basename(p.paths[0])

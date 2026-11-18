@@ -68,6 +68,77 @@ const pageFunction = (name) => {
   assert.ok(fn, `page contains ${name}`);
   return transpile(fn.getText(parsed));
 };
+
+const favoriteCommands = new Function("settings", "api", "showError", `
+  let sidebarData = null, sidebarRequest = 0, settingsReady = true;
+  let favoriteEdits = Promise.resolve(), saving = Promise.resolve();
+  ${["loadSidebar", "saveSettings", "editFavorites", "insertFavorites", "addFavorites", "removeFavorite", "resetFavorites"].map(pageFunction).join("\n")}
+  return { addFavorites, removeFavorite, resetFavorites, pending: () => favoriteEdits.then(() => saving),
+    displayed: () => sidebarData?.favorites.map(f => f.path) };
+`);
+
+test("rapid Favourites edits keep both additions and display the newest sidebar response", async () => {
+  const defaults = deferred(), requests = [], writes = [];
+  const data = paths => ({ favorites: paths.map(path => ({ path })), volumes: [] });
+  const ui = favoriteCommands({}, {
+    sidebar: paths => {
+      if (paths === null) return defaults.promise;
+      const request = deferred();
+      requests.push({ ...request, paths });
+      return request.promise;
+    },
+    writeSettings: async settings => writes.push(settings.favorites),
+  }, assert.fail);
+  ui.addFavorites(["/B"], null);
+  ui.addFavorites(["/C"], null);
+  defaults.resolve(data(["/A"]));
+  await ui.pending();
+  assert.deepEqual(writes, [["/A", "/B"], ["/A", "/B", "/C"]]);
+  requests[1].resolve(data(requests[1].paths));
+  requests[0].resolve(data(requests[0].paths));
+  await Promise.resolve();
+  assert.deepEqual(ui.displayed(), ["/A", "/B", "/C"]);
+});
+
+test("Favourites edits retain offline paths and edits after Reset start from the defaults", async () => {
+  const writes = [];
+  const ui = favoriteCommands({ favorites: ["/offline", "/A", "/B"] }, {
+    sidebar: async paths => ({ favorites: (paths ?? ["/default"]).filter(p => p !== "/offline").map(path => ({ path })) }),
+    writeSettings: async settings => writes.push(settings.favorites),
+  }, assert.fail);
+  ui.addFavorites(["/B"], "/A");
+  ui.removeFavorite("/A");
+  ui.resetFavorites();
+  ui.addFavorites(["/C"], null);
+  await ui.pending();
+  assert.deepEqual(writes, [["/offline", "/B", "/A"], ["/offline", "/B"], undefined, ["/default", "/C"]]);
+});
+
+test("Paste honors the native cut flag and the explicit Move command", async () => {
+  const modes = [], written = [];
+  let cut = false;
+  const active = { isFolder: true, path: "/dest", targets: () => [entry("notes")] };
+  const ipc = {
+    clipboardCopy: async (paths, asCut) => written.push([paths, asCut]),
+    clipboardPaste: async () => ({ paths: ["/fixture/notes"], cut }),
+  };
+  const commands = new Function("active", "api", "moveOrCopy", "showError", `
+    const run = task => task(), itemsLabel = () => "notes", showNote = () => {};
+    ${pageFunction("copyToClipboard")}
+    ${pageFunction("paste")}
+    return { copyToClipboard, paste };
+  `)(active, ipc, (_paths, _dest, mode) => modes.push(mode), assert.fail);
+  commands.copyToClipboard(active.targets(), true);
+  commands.paste();
+  cut = true;
+  commands.paste();
+  cut = false;
+  commands.paste(true);
+  await Promise.resolve();
+  assert.deepEqual(written, [[["/fixture/notes"], true]]);
+  assert.deepEqual(modes, ["copy", "move", "move"]);
+});
+
 const keyboard = new Function("active", "api", "run", "HTMLElement", "HTMLInputElement", "isApp", `
   const window = { innerHeight: 900 };
   let prompt = null, batch = null, menu = null, typed = "", typedTimer;

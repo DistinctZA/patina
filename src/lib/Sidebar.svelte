@@ -166,7 +166,7 @@
                 class:current={current === place.path}
                 class:drop-target={isDropTarget(place.path)}
                 onclick={() => open(place.path)}
-                onmousedown={(e) => startDrag(e, () => ({ kind: "favorite", index: i }))}
+                onmousedown={(e) => startDrag(e, () => ({ kind: "favorite", path: place.path }))}
                 title={place.path}
               >
                 <span class="ico"><Icon size={16} /></span>

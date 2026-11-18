@@ -215,8 +215,8 @@ async fn rename_many(renames: Vec<(String, String)>) -> Result<(), String> {
 // Clipboard commands are synchronous, so Tauri runs them on the main thread,
 // where AppKit expects the pasteboard to be used.
 #[tauri::command]
-fn clipboard_copy(paths: Vec<String>) -> Result<(), String> {
-    if pasteboard::copy_files(&paths) {
+fn clipboard_copy(paths: Vec<String>, cut: Option<bool>) -> Result<(), String> {
+    if pasteboard::copy_files(&paths, cut.unwrap_or(false)) {
         Ok(())
     } else {
         Err("Couldn't put the files on the clipboard".into())
@@ -234,7 +234,7 @@ fn clipboard_copy_text(text: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn clipboard_paste() -> Vec<String> {
+fn clipboard_paste() -> pasteboard::PastedFiles {
     pasteboard::pasted_files()
 }
 
